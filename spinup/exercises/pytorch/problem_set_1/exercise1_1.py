@@ -23,12 +23,13 @@ def gaussian_likelihood(x, mu, log_std):
     Returns:
         Tensor with shape [batch]
     """
-    #######################
-    #                     #
-    #   YOUR CODE HERE    #
-    #                     #
-    #######################
-    return torch.zeros(1)
+
+    eps = 1e-11
+    pi_term = -0.5*np.log(2*np.pi)
+    std_term = -log_std
+    diff_term = -0.5*((x - mu) / torch.exp(log_std) + eps)**2
+    log_likelihood = (pi_term + std_term + diff_term).sum(axis=-1)
+    return log_likelihood
 
 
 if __name__ == '__main__':
@@ -50,6 +51,7 @@ if __name__ == '__main__':
 
     your_result = your_gaussian_likelihood.detach().numpy()
     true_result = true_gaussian_likelihood.detach().numpy()
-
+    print(f'me {your_result}')
+    print(f'correct {true_result}')
     correct = np.allclose(your_result, true_result)
     print_result(correct)

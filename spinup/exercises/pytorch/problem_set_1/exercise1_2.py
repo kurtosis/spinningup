@@ -16,13 +16,14 @@ so make sure to complete that exercise before beginning this one.
 
 """
 
+
 def mlp(sizes, activation, output_activation=nn.Identity):
     """
     Build a multi-layer perceptron in PyTorch.
 
     Args:
         sizes: Tuple, list, or other iterable giving the number of units
-            for each layer of the MLP. 
+            for each layer of the MLP.
 
         activation: Activation function for all layers except last.
 
@@ -33,12 +34,19 @@ def mlp(sizes, activation, output_activation=nn.Identity):
         (Use an nn.Sequential module.)
 
     """
-    #######################
-    #                     #
-    #   YOUR CODE HERE    #
-    #                     #
-    #######################
-    pass
+
+    layers = []
+    for i in range(len(sizes)-2):
+        n = sizes[i]
+        m = sizes[i + 1]
+        LL = nn.Linear(n, m)
+        layers += [LL, activation()]
+    n = sizes[-2]
+    m = sizes[-1]
+    LL = nn.Linear(n, m)
+    layers += [LL, output_activation()]
+    return nn.Sequential(*layers)
+
 
 class DiagonalGaussianDistribution:
 
@@ -52,12 +60,7 @@ class DiagonalGaussianDistribution:
             A PyTorch Tensor of samples from the diagonal Gaussian distribution with
             mean and log_std given by self.mu and self.log_std.
         """
-        #######################
-        #                     #
-        #   YOUR CODE HERE    #
-        #                     #
-        #######################
-        pass
+        return torch.normal(self.mu.detach(), np.exp(self.log_std.detach()))
 
     #================================(Given, ignore)==========================================#
     def log_prob(self, value):
@@ -80,14 +83,12 @@ class MLPGaussianActor(nn.Module):
         independent of observations, initialized to [-0.5, -0.5, ..., -0.5].
         (Make sure it's trainable!)
         """
-        #######################
-        #                     #
-        #   YOUR CODE HERE    #
-        #                     #
-        #######################
-        # self.log_std = 
-        # self.mu_net = 
-        pass 
+
+        self.log_std = nn.parameter.Parameter(-0.5*torch.ones(act_dim))
+        mlp_sizes = (obs_dim,) + hidden_sizes + (act_dim,)
+        print(f'mlp_sizes {mlp_sizes}')
+        self.mu_net = mlp(mlp_sizes, activation)
+
 
     #================================(Given, ignore)==========================================#
     def forward(self, obs, act=None):
@@ -131,4 +132,5 @@ if __name__ == '__main__':
     # Your implementation is probably correct if the agent has a score >500,
     # or if it reaches the top possible score of 1000, in the last five epochs.
     correct = np.mean(last_scores) > 500 or np.max(last_scores)==1e3
+
     print_result(correct)

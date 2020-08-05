@@ -199,42 +199,34 @@ def td3(env_fn, actor_critic=core.MLPActorCritic, ac_kwargs=dict(), seed=0,
     #                                                                         #
     #=========================================================================#
 
-    # Set up function for computing TD3 Q-losses
+
+    # Solution version
     def compute_loss_q(data):
         o, a, r, o2, d = data['obs'], data['act'], data['rew'], data['obs2'], data['done']
 
-        # Q-values
-        #######################
-        #                     #
-        #   YOUR CODE HERE    #
-        #                     #
-        #######################
-        # q1 = 
-        # q2 = 
+        q1 = ac.q1(o,a)
+        q2 = ac.q2(o,a)
 
-        # Target policy smoothing
-        #######################
-        #                     #
-        #   YOUR CODE HERE    #
-        #                     #
-        #######################
+        # Bellman backup for Q functions
+        with torch.no_grad():
+            pi_targ = ac_targ.pi(o2)
 
-        # Target Q-values
-        #######################
-        #                     #
-        #   YOUR CODE HERE    #
-        #                     #
-        #######################
+            # Target policy smoothing
+            epsilon = torch.randn_like(pi_targ) * target_noise
+            epsilon = torch.clamp(epsilon, -noise_clip, noise_clip)
+            a2 = pi_targ + epsilon
+            a2 = torch.clamp(a2, -act_limit, act_limit)
+
+            # Target Q-values
+            q1_pi_targ = ac_targ.q1(o2, a2)
+            q2_pi_targ = ac_targ.q2(o2, a2)
+            q_pi_targ = torch.min(q1_pi_targ, q2_pi_targ)
+            backup = r + gamma * (1 - d) * q_pi_targ
 
         # MSE loss against Bellman backup
-        #######################
-        #                     #
-        #   YOUR CODE HERE    #
-        #                     #
-        #######################
-        # loss_q1 = 
-        # loss_q2 = 
-        # loss_q = 
+        loss_q1 = ((q1 - backup)**2).mean()
+        loss_q2 = ((q2 - backup)**2).mean()
+        loss_q = loss_q1 + loss_q2
 
         # Useful info for logging
         loss_info = dict(Q1Vals=q1.detach().numpy(),
@@ -242,14 +234,65 @@ def td3(env_fn, actor_critic=core.MLPActorCritic, ac_kwargs=dict(), seed=0,
 
         return loss_q, loss_info
 
-    # Set up function for computing TD3 pi loss
+    # Set up function for computing TD3 Q-losses
+    def compute_loss_q_mine(data):
+        o, a, r, o2, d = data['obs'], data['act'], data['rew'], data['obs2'], data['done']
+
+        # Q-values
+        q1 = ac.q1(o, a)
+        q2 = ac.q2(o, a)
+
+        # Target policy smoothing
+        # a2 = ac_targ.act(torch.as_tensor(o2, dtype=torch.float32))
+        # a2 += target_noise * np.random.randn(act_dim)
+        # a2 = np.clip(a2, -act_limit, act_limit)
+
+        # Target Q-values
+        # q1_targ = ac_targ.q1(
+        #     torch.as_tensor(o2, dtype=torch.float32),
+        #     torch.as_tensor(a2, dtype=torch.float32),
+        # )
+        # q2_targ = ac_targ.q2(
+        #     torch.as_tensor(o2, dtype=torch.float32),
+        #     torch.as_tensor(a2, dtype=torch.float32),
+        # )
+        # target = r + gamma * (1 - d) * torch.min(q1_targ, q2_targ)
+
+        with torch.no_grad():
+            a2 = ac_targ.pi(o2)
+            epsilon = torch.randn_like(a2) * target_noise
+            epsilon = torch.clamp(epsilon, -noise_clip, noise_clip)
+            a2 += epsilon
+            a2 = torch.clamp(a2, -act_limit, act_limit)
+
+            q1_targ = ac_targ.q1(o2, a2)
+            q2_targ = ac_targ.q2(o2, a2)
+            q_targ = torch.min(q1_targ, q2_targ)
+            target = r + gamma * (1 - d) * q_targ
+
+
+        # MSE loss against Bellman backup
+        loss_q1 = ((q1 - target)**2).mean()
+        loss_q2 = ((q2 - target)**2).mean()
+        loss_q = loss_q1 + loss_q2
+
+        # Useful info for logging
+        loss_info = dict(Q1Vals=q1.detach().numpy(),
+                         Q2Vals=q2.detach().numpy())
+
+        return loss_q, loss_info
+
+
+    # Solution version
     def compute_loss_pi(data):
-        #######################
-        #                     #
-        #   YOUR CODE HERE    #
-        #                     #
-        #######################
-        # loss_pi = 
+        o = data['obs']
+        q1_pi = ac.q1(o, ac.pi(o))
+        return -q1_pi.mean()
+
+    # Set up function for computing TD3 pi loss
+    def compute_loss_pi_mine(data):
+        o = data['obs']
+        loss_pi = -ac.q1(o, ac.pi(o)).mean()
         return loss_pi
 
     #=========================================================================#
@@ -407,10 +450,12 @@ if __name__ == '__main__':
         max_ep_len=150,
         seed=args.seed, 
         logger_kwargs=logger_kwargs,
-        epochs=10
+        epochs=2
         )
     
     if args.use_soln:
+        print('use solution')
         true_td3(**all_kwargs)
     else:
+        print('use my answer')
         td3(**all_kwargs)
