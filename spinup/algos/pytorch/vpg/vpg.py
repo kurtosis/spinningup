@@ -271,6 +271,7 @@ def vpg(env_fn, actor_critic=core.MLPActorCritic, ac_kwargs=dict(),  seed=0,
     # Main loop: collect experience in env and update/log each epoch
     for epoch in range(epochs):
         for t in range(local_steps_per_epoch):
+            # print(f'step {t}')
             a, v, logp = ac.step(torch.as_tensor(o, dtype=torch.float32))
 
             next_o, r, d, _ = env.step(a)
@@ -323,6 +324,8 @@ def vpg(env_fn, actor_critic=core.MLPActorCritic, ac_kwargs=dict(),  seed=0,
         logger.log_tabular('KL', average_only=True)
         logger.log_tabular('Time', time.time()-start_time)
         logger.dump_tabular()
+    end_time = time.time()
+    print(f'total time: {end_time - start_time}')
 
 
 def vpg_mod(env_fn, actor_critic=core.MLPActorCritic, ac_kwargs=dict(), env_kwargs=dict(), seed=0,
@@ -445,7 +448,6 @@ def vpg_mod(env_fn, actor_critic=core.MLPActorCritic, ac_kwargs=dict(), env_kwar
 
     # Set up experience buffer
     local_steps_per_epoch = int(steps_per_epoch / num_procs())
-    # print(f'local_steps_per_epoch {local_steps_per_epoch}')
     buf = VPGBuffer(obs_dim, act_dim, local_steps_per_epoch, gamma, lam)
 
     # Set up function for computing VPG policy loss

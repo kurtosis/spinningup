@@ -1,27 +1,39 @@
 import os
 os.environ['KMP_DUPLICATE_LIB_OK']='True'
-
-import scipy.signal
 import sys
-# from scipy import special
 sys.path.insert(0, '/Users/kurtsmith/research/pytorch_projects/reinforcement_learning/environments')
 sys.path.insert(0, '/Users/kurtsmith/research/spinningup')
-# from ultimatum_env import *
-import gym
+
 import importlib
 import numpy as np
-import pandas as pd
+import scipy.signal
+import time
+
+import gym
+# import pandas as pd
 # import plotnine as pn
 import torch
-import torch.nn as nn
-import torch.nn.functional as F
-from torch.optim import Adam
-import ultimatum_env
-importlib.reload(ultimatum_env)
-import spinup.algos.pytorch.vpg.core as core
-import spinup.algos.pytorch.vpg.vpg as vpg
-
 from torch.distributions import Beta, Uniform, Normal
+import torch.nn as nn
+# import torch.nn.functional as F
+from torch.optim import Adam
+
+# importlib.reload(ultimatum_env)
+import spinup.algos.pytorch.vpg.core as core
+# import spinup.algos.pytorch.vpg.vpg as vpg
+from spinup.utils.logx import EpochLogger
+import ultimatum_env
+
+
+def mlp(layer_sizes, hidden_activation, final_activation):
+    layers = []
+    for i in range(len(layer_sizes)-1):
+        layers.append(nn.Linear(layer_sizes[i], layer_sizes[i+1]))
+        if i < len(layer_sizes) - 2:
+            layers.append(hidden_activation())
+        else:
+            layers.append(final_activation())
+    return nn.Sequential(*layers)
 
 
 class PendulumActor(nn.Module):
@@ -30,29 +42,24 @@ class PendulumActor(nn.Module):
     Input dimension: 3 (observation)
     """
 
-    def __init__(self):
+    def __init__(self, layer_sizes_mu, layer_sizes_sigma, activation):
         super().__init__()
-        self.fc = nn.Linear(3, 100)
-        self.mu_head = nn.Linear(100, 1)
-        self.sigma_head = nn.Linear(100, 1)
-
-    def net(self, x):
-        x = F.relu(self.fc(x))
-        mu = 2.0 * torch.tanh(self.mu_head(x))
-        #         log_sigma = 2.0*torch.tanh(self.sigma_head(x))
-        sigma = F.softplus(self.sigma_head(x))
-        #         std = torch.exp(self.log_std)
-        return (mu, sigma)
+        self.mu_net = mlp(layer_sizes_mu, activation, nn.Identity)
+        # self.sigma_net = mlp(layer_sizes_sigma, activation, nn.Softplus)
+        self.log_sigma_net = mlp(layer_sizes_sigma, activation, nn.Identity)
+        # adjust this to use action size
+        # self.log_sigma = torch.nn.Parameter(torch.Tensor([-0.5]))
 
     def _distribution(self, obs):
-        #         o = torch.from_numpy(obs).float().unsqueeze(0)
-        with torch.no_grad():
-            mu, sigma = self.net(obs)
+        mu = self.mu_net(obs)
+        # sigma = self.sigma_net(obs)
+        sigma = torch.exp(self.log_sigma_net(obs))
+        # sigma = torch.exp(self.log_sigma)
         return Normal(mu, sigma)
 
     def _logprob_from_distr(self, pi, act):
         # Need sum for a Normal distribution
-        return pi.log_prob(act).sum(axis=1)
+        return pi.log_prob(act).sum(axis=-1)
 
     def forward(self, obs, act=None):
         pi = self._distribution(obs)
@@ -69,36 +76,46 @@ class PendulumCritic(nn.Module):
     Output dimension: 1
     """
 
-    def __init__(self):
+    def __init__(self, layer_sizes_v, activation):
         super().__init__()
         self.fc = nn.Linear(3, 100)
         self.v_head = nn.Linear(100, 1)
+        self.v_net = mlp(layer_sizes_v, activation, nn.Identity)
 
     def forward(self, x):
-        x = F.relu(self.fc(x))
-        v = self.v_head(x)
+        # x = F.relu(self.fc(x))
+        # v = self.v_head(x)
+        v = self.v_net(x)
         return torch.squeeze(v, -1) # Critical to ensure v has right shape.
 
 
-class PendulumAgent():
+class PendulumAgent(nn.Module):
     """
     Contains an actor (to produce policy and act)
     and a critic (to estimate value function)
     """
 
-    def __init__(self):
-        self.actor = PendulumActor()
-        self.critic = PendulumCritic()
+    def __init__(self, observation_space, action_space,
+                 hidden_layers_mu=[100], hidden_layers_sigma=[100], hidden_layers_v=[100],
+                 activation = nn.Tanh,
+                 **kwargs):
+        super().__init__()
+        obs_dim = observation_space.shape[0]
+        act_dim = action_space.shape[0]
+        layer_sizes_mu = [obs_dim] + hidden_layers_mu + [act_dim]
+        layer_sizes_sigma = [obs_dim] + hidden_layers_sigma + [act_dim]
+        layer_sizes_v = [obs_dim] + hidden_layers_v + [1]
+        self.pi = PendulumActor(layer_sizes_mu=layer_sizes_mu, layer_sizes_sigma=layer_sizes_sigma, activation=activation)
+        self.v = PendulumCritic(layer_sizes_v=layer_sizes_v, activation=activation)
 
     def step(self, obs):
         with torch.no_grad():
-            pi = self.actor._distribution(obs)
+            pi = self.pi._distribution(obs)
             act = pi.sample()
             logprob = pi.log_prob(act)
-            logprob = logprob.sum(axis=1)
-            # logprob = logprob.sum()
+            logprob = logprob.sum(axis=-1)
             act = act.clamp(-2, 2)
-            val = self.critic(obs)
+            val = self.v(obs)
         return act.numpy(), val.numpy(), logprob.numpy()
 
     def act(self, obs):
@@ -215,149 +232,362 @@ class TrajectoryBuffer:
         return data
 
 
-def compute_loss_pi(data, agent):
-    # get data
-    obs, act, adv, logprob_old = data['obs'], data['act'], data['adv'], data['logprob']
-
-    # Get policy (given obs) and logprob of actions taken
-    pi, logprob = agent.actor(obs, act)
-    # The loss function equation for VPG (see docs)
-    pi_loss = -(logprob * adv).mean()
-
-    # TODO add info
-    pi_info = None
-
-    return pi_loss, pi_info
-
-
-def compute_loss_v(data, agent):
-    obs, ret = data['obs'], data['ret']
-    v = agent.critic(obs)
-    return ((v - ret) ** 2).mean()
-
-
-def update(agent, buf, pi_optimizer, v_optimizer, train_v_iters=80):
-    # TODO
-    # - add logging at end
-    # DONE: write loss computation
-
-    # Get training data from buffer
-    data = buf.get()
-
-    # Compute policy/value losses
-    pi_loss, _ = compute_loss_pi(data, agent)
-    v_loss = compute_loss_v(data, agent).item()
-
-    # Update policy by single step using optimizer
-    pi_optimizer.zero_grad()
-    pi_loss, _ = compute_loss_pi(data, agent)
-    pi_loss.backward()
-    pi_optimizer.step()
-
-    # Update value function multiple steps using optimizer
-    for i in range(train_v_iters):
-        v_optimizer.zero_grad()
-        v_loss = compute_loss_v(data, agent)
-        v_loss.backward()
-        v_optimizer.step()
-
-    # add logging?
-
-
-def print_info(x, name):
-    print(f'{name} {x}')
-    print(f'{name} type {type(x)}')
-    print(f'{name} shape {x.shape}')
-
-
-# TODO
-# DONE finish buffer methods
-# DONE create update step to learn agent models
-# DONE figure out how to deal with epochs/episodes/steps
-def train(seed=0, n_epochs=10, n_steps_per_epoch=200,
-          log_interval=10, render=True,
-          max_episode_length=100,
-          pi_lr=3e-4, v_lr=1e-3):
+def my_vpg(env_fn, actor_critic, seed=0, epochs=10, steps_per_epoch=200,
+           log_interval=10, render=True,
+           max_episode_len=100,
+           gamma=0.99, lam=0.97,
+           train_v_iters=80,
+           pi_lr=3e-4, vf_lr=1e-3,
+           ac_kwargs=dict(), logger_kwargs=dict(), save_freq=10):
+    """Run VPG training."""
     # Initialize environment, agent, auxilary objects
-    env = gym.make('Pendulum-v0')
-    env.seed(seed)
+
+    logger = EpochLogger(**logger_kwargs)
+    logger.save_config(locals())
+
+    torch.manual_seed(seed)
+    np.random.seed(seed)
+
+    env = env_fn()
+    # env.seed(seed)
     obs_dim = env.observation_space.shape
     act_dim = env.action_space.shape
-    agent = PendulumAgent()
-    training_records = []
-    running_avg_return = -1000
-    buf = TrajectoryBuffer(obs_dim, act_dim, n_steps_per_epoch)
-    pi_optimizer = Adam(agent.actor.parameters(), lr=pi_lr)
-    v_optimizer = Adam(agent.critic.parameters(), lr=v_lr)
+    ac = actor_critic(env.observation_space, env.action_space, **ac_kwargs)
 
-    for i_epoch in range(n_epochs):
+    var_counts = tuple(core.count_vars(module) for module in [ac.pi, ac.v])
+    logger.log(f'\nNumber of parameters \t pi: {var_counts[0]} v: {var_counts[1]}\n')
+
+    # training_records = []
+    # running_avg_return = -1000
+    buf = TrajectoryBuffer(obs_dim, act_dim, steps_per_epoch, gamma, lam)
+    pi_optimizer = Adam(ac.pi.parameters(), lr=pi_lr)
+    v_optimizer = Adam(ac.v.parameters(), lr=vf_lr)
+
+    # Set up model saving
+    logger.setup_pytorch_saver(ac)
+
+    def compute_loss_pi(data):
+        # get data
+        obs, act, adv, logprob_old = data['obs'], data['act'], data['adv'], data['logprob']
+
+        # Get policy (given obs) and logprob of actions taken
+        pi, logprob = ac.pi(obs, act)
+        # The loss function equation for VPG (see docs)
+        pi_loss = -(logprob * adv).mean()
+
+        # KL-div is approx difference in log probs
+        approx_kl = (logprob_old - logprob).mean().item()
+        ent = pi.entropy().mean().item()
+        pi_info = {'kl': approx_kl, 'ent': ent}
+        return pi_loss, pi_info
+
+    def compute_loss_v(data):
+        obs, ret = data['obs'], data['ret']
+        v = ac.v(obs)
+        return ((v - ret) ** 2).mean()
+
+    def update():
+        # TODO
+        # - add logging at end
+        # DONE: write loss computation
+
+        # Get training data from buffer
+        data = buf.get()
+
+        # Compute policy/value losses
+        pi_loss_old, pi_info_old = compute_loss_pi(data)
+        pi_loss_old = pi_loss_old.item()
+        v_loss_old = compute_loss_v(data).item()
+
+        # Update policy by single step using optimizer
+        pi_optimizer.zero_grad()
+        pi_loss, pi_info = compute_loss_pi(data)
+        pi_loss.backward()
+        pi_optimizer.step()
+
+        # Update value function multiple steps using optimizer
+        for i in range(train_v_iters):
+            v_optimizer.zero_grad()
+            v_loss = compute_loss_v(data)
+            v_loss.backward()
+            v_optimizer.step()
+
+        # add logging?
+        kl, ent = pi_info['kl'], pi_info['ent']
+        logger.store(LossPi=pi_loss_old, LossV=v_loss_old,
+                     KL=kl, Entropy=ent,
+                     DeltaLossPi=pi_loss.item() - pi_loss_old,
+                     DeltaLossV=v_loss.item() - v_loss_old
+                     )
+
+    start_time = time.time()
+
+    for epoch in range(epochs):
         # Start a new epoch
         obs = env.reset()
         episode_return = 0
         episode_length = 0
         episode_count = 0
-        print(f'epoch {i_epoch}')
-        for t in range(n_steps_per_epoch):
-            print(f'step {t}')
+        print(f'epoch {epoch}')
+        for t in range(steps_per_epoch):
+            # print(f'step {t}')
             # Step agent given latest observation
-            a, v, logprob = agent.step(torch.as_tensor([obs], dtype=torch.float32))
-
+            a, v, logprob = ac.step(torch.as_tensor(obs, dtype=torch.float32))
             # Step environment given latest agent action
-            obs_next, reward, done, _ = env.step([a])
-            # Store current step in buffer
-            buf.store(obs, a, reward, v, logprob)
+            obs_next, reward, done, _ = env.step(a)
             # Visualize current state if desired
             if render:
                 env.render()
 
-            # update episode return and env state
-            episode_length += 1
             episode_return += reward
+            episode_length += 1
+
+            # Store current step in buffer
+            buf.store(obs, a, reward, v, logprob)
+            logger.store(VVals=v)
+
+            # update episode return and env state
             obs = obs_next
 
-            episode_capped = (episode_length == max_episode_length)
-            epoch_ended = (t == n_steps_per_epoch - 1)
-            end_episode = done or episode_capped or epoch_ended
+            # check if episode is over
+            episode_capped = (episode_length == max_episode_len)
+            epoch_ended = (t == steps_per_epoch - 1)
+            end_episode = (done or episode_capped or epoch_ended)
             if end_episode:
                 episode_count += 1
-                obs = env.reset()
-                episode_return = 0
-                episode_length = 0
                 if not (done or episode_capped):
                     print(f'Trajectory terminated by end of epoch at step {episode_length}')
                 # get last value function
                 if episode_capped or epoch_ended:
-                    _, v, _ = agent.step(torch.as_tensor([obs], dtype=torch.float32))
+                    _, v, _ = ac.step(torch.as_tensor(obs, dtype=torch.float32))
                 else:
                     v = 0
                 buf.finish_path(v)
+                if done or episode_capped:
+                    logger.store(EpRet=episode_return, EpLen=episode_length)
+                obs = env.reset()
+                episode_return = 0
+                episode_length = 0
 
-        update(agent, buf, pi_optimizer, v_optimizer)
+
+        update()
+
+        # Log info about epoch
+        logger.log_tabular('Epoch', epoch)
+        logger.log_tabular('EpRet', with_min_and_max=True)
+        logger.log_tabular('EpLen', average_only=True)
+        logger.log_tabular('VVals', with_min_and_max=True)
+        logger.log_tabular('TotalEnvInteracts', (epoch+1)*steps_per_epoch)
+        logger.log_tabular('LossPi', average_only=True)
+        logger.log_tabular('LossV', average_only=True)
+        logger.log_tabular('DeltaLossPi', average_only=True)
+        logger.log_tabular('DeltaLossV', average_only=True)
+        logger.log_tabular('Entropy', average_only=True)
+        logger.log_tabular('KL', average_only=True)
+        logger.log_tabular('Time', time.time()-start_time)
+        logger.dump_tabular()
+
         # update running avg of episode score and training trajectory buffer
-        running_avg_return = running_avg_return * 0.9 + episode_return * 0.1
-        training_records.append(TrainingRecord(i_ep, running_reward))
+        # running_avg_return = running_avg_return * 0.9 + episode_return * 0.1
+        # training_records.append(TrainingRecord(i_ep, running_reward))
 
-        # Print running avg episode score at end of episode
-        if i_ep % log_interval == 0:
-            print('Ep {}\tMoving average score: {:.2f}\t'.format(i_ep, running_reward))
-        if running_reward > -200:
-            print("Solved! Moving average score is now {}!".format(running_reward))
-            env.close()
-            #             agent.save_param()
-            #             with open('log/ppo_training_records.pkl', 'wb') as f:
-            #                 pickle.dump(training_records, f)
-            break
+        # # Print running avg episode score at end of episode
+        # if i_ep % log_interval == 0:
+        #     print('Ep {}\tMoving average score: {:.2f}\t'.format(i_ep, running_reward))
+        # if running_reward > -200:
+        #     print("Solved! Moving average score is now {}!".format(running_reward))
+        #     env.close()
+        #     #             ac.save_param()
+        #     #             with open('log/ppo_training_records.pkl', 'wb') as f:
+        #     #                 pickle.dump(training_records, f)
+        #     break
 
-    plt.plot([r.ep for r in training_records], [r.reward for r in training_records])
-    plt.title('VPG')
-    plt.xlabel('Episode')
-    plt.ylabel('Moving averaged episode reward')
-    plt.savefig("./vpg.png")
-    plt.show()
+    # plt.plot([r.ep for r in training_records], [r.reward for r in training_records])
+    # plt.title('VPG')
+    # plt.xlabel('Episode')
+    # plt.ylabel('Moving averaged episode reward')
+    # plt.savefig("./vpg.png")
+    # plt.show()
+    # end_time = time.time()
+    # print(f'total time: {end_time - start_time}')
+
+def my_ppo(env_fn, actor_critic, seed=0, epochs=10, steps_per_epoch=200,
+           log_interval=10, render=True,
+           max_episode_len=100,
+           gamma=0.99, lam=0.97,
+           train_v_iters=80,
+           pi_lr=3e-4, vf_lr=1e-3,
+           ac_kwargs=dict(), logger_kwargs=dict(), save_freq=10):
+    """Run PPO training."""
+    # Initialize environment, agent, auxilary objects
+
+    logger = EpochLogger(**logger_kwargs)
+    logger.save_config(locals())
+
+    torch.manual_seed(seed)
+    np.random.seed(seed)
+
+    env = env_fn()
+    # env.seed(seed)
+    obs_dim = env.observation_space.shape
+    act_dim = env.action_space.shape
+    ac = actor_critic(env.observation_space, env.action_space, **ac_kwargs)
+
+    var_counts = tuple(core.count_vars(module) for module in [ac.pi, ac.v])
+    logger.log(f'\nNumber of parameters \t pi: {var_counts[0]} v: {var_counts[1]}\n')
+
+    buf = TrajectoryBuffer(obs_dim, act_dim, steps_per_epoch, gamma, lam)
+    pi_optimizer = Adam(ac.pi.parameters(), lr=pi_lr)
+    v_optimizer = Adam(ac.v.parameters(), lr=vf_lr)
+
+    # Set up model saving
+    logger.setup_pytorch_saver(ac)
+
+    def compute_loss_pi(data):
+        # get data
+        obs, act, adv, logprob_old = data['obs'], data['act'], data['adv'], data['logprob']
+
+        # Get policy (given obs) and logprob of actions taken
+        pi, logprob = ac.pi(obs, act)
+        # The loss function equation for VPG (see docs)
+        pi_loss = -(logprob * adv).mean()
+
+        # KL-div is approx difference in log probs
+        approx_kl = (logprob_old - logprob).mean().item()
+        ent = pi.entropy().mean().item()
+        pi_info = {'kl': approx_kl, 'ent': ent}
+        return pi_loss, pi_info
+
+    def compute_loss_v(data):
+        obs, ret = data['obs'], data['ret']
+        v = ac.v(obs)
+        return ((v - ret) ** 2).mean()
+
+    def update():
+        # Get training data from buffer
+        data = buf.get()
+
+        # Compute policy/value losses
+        pi_loss_old, pi_info_old = compute_loss_pi(data)
+        pi_loss_old = pi_loss_old.item()
+        v_loss_old = compute_loss_v(data).item()
+
+        # Update policy by single step using optimizer
+        pi_optimizer.zero_grad()
+        pi_loss, pi_info = compute_loss_pi(data)
+        pi_loss.backward()
+        pi_optimizer.step()
+
+        # Update value function multiple steps using optimizer
+        for i in range(train_v_iters):
+            v_optimizer.zero_grad()
+            v_loss = compute_loss_v(data)
+            v_loss.backward()
+            v_optimizer.step()
+
+        # add logging?
+        kl, ent = pi_info['kl'], pi_info['ent']
+        logger.store(LossPi=pi_loss_old, LossV=v_loss_old,
+                     KL=kl, Entropy=ent,
+                     DeltaLossPi=pi_loss.item() - pi_loss_old,
+                     DeltaLossV=v_loss.item() - v_loss_old
+                     )
+
+    start_time = time.time()
+
+    for epoch in range(epochs):
+        # Start a new epoch
+        obs = env.reset()
+        episode_return = 0
+        episode_length = 0
+        episode_count = 0
+        print(f'epoch {epoch}')
+        for t in range(steps_per_epoch):
+            # print(f'step {t}')
+            # Step agent given latest observation
+            a, v, logprob = ac.step(torch.as_tensor(obs, dtype=torch.float32))
+            # Step environment given latest agent action
+            obs_next, reward, done, _ = env.step(a)
+            # Visualize current state if desired
+            if render:
+                env.render()
+
+            episode_return += reward
+            episode_length += 1
+
+            # Store current step in buffer
+            buf.store(obs, a, reward, v, logprob)
+            logger.store(VVals=v)
+
+            # update episode return and env state
+            obs = obs_next
+
+            # check if episode is over
+            episode_capped = (episode_length == max_episode_len)
+            epoch_ended = (t == steps_per_epoch - 1)
+            end_episode = (done or episode_capped or epoch_ended)
+            if end_episode:
+                episode_count += 1
+                if not (done or episode_capped):
+                    print(f'Trajectory terminated by end of epoch at step {episode_length}')
+                # get last value function
+                if episode_capped or epoch_ended:
+                    _, v, _ = ac.step(torch.as_tensor(obs, dtype=torch.float32))
+                else:
+                    v = 0
+                buf.finish_path(v)
+                if done or episode_capped:
+                    logger.store(EpRet=episode_return, EpLen=episode_length)
+                obs = env.reset()
+                episode_return = 0
+                episode_length = 0
+
+
+        update()
+
+        # Log info about epoch
+        logger.log_tabular('Epoch', epoch)
+        logger.log_tabular('EpRet', with_min_and_max=True)
+        logger.log_tabular('EpLen', average_only=True)
+        logger.log_tabular('VVals', with_min_and_max=True)
+        logger.log_tabular('TotalEnvInteracts', (epoch+1)*steps_per_epoch)
+        logger.log_tabular('LossPi', average_only=True)
+        logger.log_tabular('LossV', average_only=True)
+        logger.log_tabular('DeltaLossPi', average_only=True)
+        logger.log_tabular('DeltaLossV', average_only=True)
+        logger.log_tabular('Entropy', average_only=True)
+        logger.log_tabular('KL', average_only=True)
+        logger.log_tabular('Time', time.time()-start_time)
+        logger.dump_tabular()
+
+        # update running avg of episode score and training trajectory buffer
+        # running_avg_return = running_avg_return * 0.9 + episode_return * 0.1
+        # training_records.append(TrainingRecord(i_ep, running_reward))
+
+        # # Print running avg episode score at end of episode
+        # if i_ep % log_interval == 0:
+        #     print('Ep {}\tMoving average score: {:.2f}\t'.format(i_ep, running_reward))
+        # if running_reward > -200:
+        #     print("Solved! Moving average score is now {}!".format(running_reward))
+        #     env.close()
+        #     #             ac.save_param()
+        #     #             with open('log/ppo_training_records.pkl', 'wb') as f:
+        #     #                 pickle.dump(training_records, f)
+        #     break
+
+    # plt.plot([r.ep for r in training_records], [r.reward for r in training_records])
+    # plt.title('VPG')
+    # plt.xlabel('Episode')
+    # plt.ylabel('Moving averaged episode reward')
+    # plt.savefig("./vpg.png")
+    # plt.show()
+    # end_time = time.time()
+    # print(f'total time: {end_time - start_time}')
+
 
 
 if __name__ == '__main__':
-    train(seed=0, n_epochs=100, n_steps_per_epoch=10,
+    my_vpg(seed=0, epochs=100, steps_per_epoch=10,
           log_interval=1, render=False,
-          max_episode_length=500,
+          max_episode_len=500,
           pi_lr=3e-4, v_lr=1e-3)
