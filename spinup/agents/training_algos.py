@@ -4,232 +4,25 @@ import sys
 sys.path.insert(0, '/Users/kurtsmith/research/pytorch_projects/reinforcement_learning/environments')
 sys.path.insert(0, '/Users/kurtsmith/research/spinningup')
 
-import importlib
+from copy import deepcopy
 import numpy as np
-import scipy.signal
 import time
 
-import gym
-# import pandas as pd
-# import plotnine as pn
 import torch
-from torch.distributions import Beta, Uniform, Normal
-import torch.nn as nn
-# import torch.nn.functional as F
 from torch.optim import Adam
 
-# importlib.reload(ultimatum_env)
 import spinup.algos.pytorch.vpg.core as core
-# import spinup.algos.pytorch.vpg.vpg as vpg
+from spinup.agents.my_agents import *
 from spinup.utils.logx import EpochLogger
-import ultimatum_env
 
 
-def mlp(layer_sizes, hidden_activation, final_activation):
-    layers = []
-    for i in range(len(layer_sizes)-1):
-        layers.append(nn.Linear(layer_sizes[i], layer_sizes[i+1]))
-        if i < len(layer_sizes) - 2:
-            layers.append(hidden_activation())
-        else:
-            layers.append(final_activation())
-    return nn.Sequential(*layers)
-
-
-class PendulumActor(nn.Module):
-    """
-    Produces a Normal distribution for one var from a MLP for mu and sigma.
-    Input dimension: 3 (observation)
-    """
-
-    def __init__(self, layer_sizes_mu, layer_sizes_sigma, activation):
-        super().__init__()
-        self.mu_net = mlp(layer_sizes_mu, activation, nn.Identity)
-        # self.sigma_net = mlp(layer_sizes_sigma, activation, nn.Softplus)
-        self.log_sigma_net = mlp(layer_sizes_sigma, activation, nn.Identity)
-        # adjust this to use action size
-        # self.log_sigma = torch.nn.Parameter(torch.Tensor([-0.5]))
-
-    def _distribution(self, obs):
-        mu = self.mu_net(obs)
-        # sigma = self.sigma_net(obs)
-        sigma = torch.exp(self.log_sigma_net(obs))
-        # sigma = torch.exp(self.log_sigma)
-        return Normal(mu, sigma)
-
-    def _logprob_from_distr(self, pi, act):
-        # Need sum for a Normal distribution
-        return pi.log_prob(act).sum(axis=-1)
-
-    def forward(self, obs, act=None):
-        pi = self._distribution(obs)
-        logprob = None
-        if act is not None:
-            logprob = self._logprob_from_distr(pi, act)
-        return pi, logprob
-
-
-class PendulumCritic(nn.Module):
-    """
-    Produces a value estimate from a MLP.
-    Input dimension: 3 (observation)
-    Output dimension: 1
-    """
-
-    def __init__(self, layer_sizes_v, activation):
-        super().__init__()
-        self.fc = nn.Linear(3, 100)
-        self.v_head = nn.Linear(100, 1)
-        self.v_net = mlp(layer_sizes_v, activation, nn.Identity)
-
-    def forward(self, x):
-        # x = F.relu(self.fc(x))
-        # v = self.v_head(x)
-        v = self.v_net(x)
-        return torch.squeeze(v, -1) # Critical to ensure v has right shape.
-
-
-class PendulumAgent(nn.Module):
-    """
-    Contains an actor (to produce policy and act)
-    and a critic (to estimate value function)
-    """
-
-    def __init__(self, observation_space, action_space,
-                 hidden_layers_mu=[100], hidden_layers_sigma=[100], hidden_layers_v=[100],
-                 activation = nn.Tanh,
-                 **kwargs):
-        super().__init__()
-        obs_dim = observation_space.shape[0]
-        act_dim = action_space.shape[0]
-        layer_sizes_mu = [obs_dim] + hidden_layers_mu + [act_dim]
-        layer_sizes_sigma = [obs_dim] + hidden_layers_sigma + [act_dim]
-        layer_sizes_v = [obs_dim] + hidden_layers_v + [1]
-        self.pi = PendulumActor(layer_sizes_mu=layer_sizes_mu, layer_sizes_sigma=layer_sizes_sigma, activation=activation)
-        self.v = PendulumCritic(layer_sizes_v=layer_sizes_v, activation=activation)
-
-    def step(self, obs):
-        with torch.no_grad():
-            pi = self.pi._distribution(obs)
-            act = pi.sample()
-            logprob = pi.log_prob(act)
-            logprob = logprob.sum(axis=-1)
-            act = act.clamp(-2, 2)
-            val = self.v(obs)
-        return act.numpy(), val.numpy(), logprob.numpy()
-
-    def act(self, obs):
-        return self.step(obs)[0]
-
-
-# my implementation
-def discount_cumsum(x, discount):
-    discounts = [discount ** ll for ll in range(len(x))]
-    disc_seqs = [discounts] + [discounts[:-i] for i in range(1,len(x))]
-    return np.array([np.dot(x[i:], disc_seqs[i]) for i in range(len(x))])
-
-
-def discount_cumsum_orig(x, discount):
-    """
-    magic from rllab for computing discounted cumulative sums of vectors.
-
-    input:
-        vector x,
-        [x0,
-         x1,
-         x2]
-
-    output:
-        [x0 + discount * x1 + discount^2 * x2,
-         x1 + discount * x2,
-         x2]
-    """
-    return scipy.signal.lfilter([1], [1, float(-discount)], x[::-1], axis=0)[::-1]
-
-
-def merge_shape(shape1, shape2=None):
-    if shape2 is None:
-        return (shape1,)
-    elif np.isscalar(shape2):
-        return (shape1, shape2)
-    else:
-        return (shape1, *shape2)
-
-
-class TrajectoryBuffer:
-    def __init__(self, obs_dim, act_dim, size, gamma=0.99, lamb=0.95):
-        self.obs = np.zeros(merge_shape(size, obs_dim), dtype=np.float32)
-        self.act = np.zeros(merge_shape(size, act_dim), dtype=np.float32)
-        self.adv = np.zeros(size, dtype=np.float32)
-        self.reward = np.zeros(size, dtype=np.float32)
-        self.ret = np.zeros(size, dtype=np.float32)
-        self.v = np.zeros(size, dtype=np.float32)
-        self.logprob = np.zeros(size, dtype=np.float32)
-        self.gamma = gamma
-        self.lamb = lamb
-        self.ptr = 0
-        self.path_start = 0
-        self.max_size = size
-
-    def store(self, obs, act, reward, val, logprob):
-        """Add current step variables to buffer."""
-        assert self.ptr < self.max_size
-        self.obs[self.ptr] = obs
-        self.act[self.ptr] = act
-        self.reward[self.ptr] = reward
-        self.v[self.ptr] = val
-        self.logprob[self.ptr] = logprob
-        self.ptr += 1
-
-    def finish_path(self, last_v=0):
-        """
-        We've logged most variables at each step in episode.
-        There are two vars that can only be computed at end
-        of episode (b/c they depend on future rewards):
-        - Advantage (for GAE)
-        - Return (using reward-to-go)
-        Compute both of those here and save to buffer.
-        Update start index for next episode.
-        """
-        # note location of current episode in buffer
-        path_slice = slice(self.path_start, self.ptr)
-        # get rewards and values of current episode, append the last step value
-        rewards = np.append(self.reward[path_slice], last_v)
-        values = np.append(self.v[path_slice], last_v)
-        # compute advantage fn A(s_t,a_t) for each step in episode using GAE
-        # write this to the buffer in the location of this episode
-        deltas = rewards[:-1] + self.gamma * values[1:] - values[:-1]
-        self.adv[path_slice] = discount_cumsum(deltas, self.gamma * self.lamb)
-        # compute rewards to go
-        self.ret[path_slice] = discount_cumsum(rewards, self.gamma)[:-1]
-        # Update start index for next episode
-        self.path_start = self.ptr
-
-    def get(self):
-        """
-        Return needed variables (as tensors) over episodes in buffer.
-        Note that advantage is normalized first.
-        Reset pointers for next epoch.
-        """
-        # can only get data when buffer is full
-        assert self.ptr == self.max_size
-        # reset pointers for next epoch
-        self.ptr = 0
-        self.path_start = 0
-        # Normalize adv for GAE
-        adv_mean = self.adv.mean()
-        adv_std = self.adv.std()
-        self.adv = (self.adv - adv_mean) / adv_std
-        # return needed variables as a dictionary
-        data = {
-            'obs': self.obs,
-            'act': self.act,
-            'adv': self.adv,
-            'ret': self.ret,
-            'logprob': self.logprob,
-        }
-        data = {k: torch.as_tensor(v, dtype=torch.float32) for k, v in data.items()}
-        return data
+def target_update(net_main, net_target, polyak=0.9):
+    """Update a lagged target network by Polya averaging."""
+    new_state_dict = net_target.state_dict()
+    for key in new_state_dict:
+        new_state_dict[key] = polyak*net_target.state_dict()[key] + (1-polyak)*net_main.state_dict()[key]
+    net_target.load_state_dict(new_state_dict)
+    return net_target
 
 
 def my_vpg(env_fn, actor_critic, seed=0, epochs=10, steps_per_epoch=200,
@@ -328,7 +121,6 @@ def my_vpg(env_fn, actor_critic, seed=0, epochs=10, steps_per_epoch=200,
         episode_return = 0
         episode_length = 0
         episode_count = 0
-        print(f'epoch {epoch}')
         for t in range(steps_per_epoch):
             # print(f'step {t}')
             # Step agent given latest observation
@@ -369,7 +161,9 @@ def my_vpg(env_fn, actor_critic, seed=0, epochs=10, steps_per_epoch=200,
                 episode_return = 0
                 episode_length = 0
 
-
+        # Save model
+        if (epoch % save_freq == 0) or (epoch == epochs - 1):
+            logger.save_state({'env': env}, None)
         update()
 
         # Log info about epoch
@@ -411,12 +205,14 @@ def my_vpg(env_fn, actor_critic, seed=0, epochs=10, steps_per_epoch=200,
     # end_time = time.time()
     # print(f'total time: {end_time - start_time}')
 
+
 def my_ppo(env_fn, actor_critic, seed=0, epochs=10, steps_per_epoch=200,
-           log_interval=10, render=True,
+           log_interval=10, render=False,
            max_episode_len=100,
            gamma=0.99, lam=0.97,
-           train_v_iters=80,
+           train_pi_iters=100, train_v_iters=80,
            pi_lr=3e-4, vf_lr=1e-3,
+           clip_ratio=0.2, target_kl=0.015,
            ac_kwargs=dict(), logger_kwargs=dict(), save_freq=10):
     """Run PPO training."""
     # Initialize environment, agent, auxilary objects
@@ -443,14 +239,16 @@ def my_ppo(env_fn, actor_critic, seed=0, epochs=10, steps_per_epoch=200,
     # Set up model saving
     logger.setup_pytorch_saver(ac)
 
-    def compute_loss_pi(data):
+    def compute_loss_pi(data, clip_ratio=clip_ratio):
         # get data
         obs, act, adv, logprob_old = data['obs'], data['act'], data['adv'], data['logprob']
 
         # Get policy (given obs) and logprob of actions taken
         pi, logprob = ac.pi(obs, act)
-        # The loss function equation for VPG (see docs)
-        pi_loss = -(logprob * adv).mean()
+
+        pi_ratio = torch.exp(logprob - logprob_old)
+        clips = 1. + clip_ratio*torch.sign(adv)
+        pi_loss = -torch.min(pi_ratio*adv, clips*adv).mean()
 
         # KL-div is approx difference in log probs
         approx_kl = (logprob_old - logprob).mean().item()
@@ -472,11 +270,15 @@ def my_ppo(env_fn, actor_critic, seed=0, epochs=10, steps_per_epoch=200,
         pi_loss_old = pi_loss_old.item()
         v_loss_old = compute_loss_v(data).item()
 
-        # Update policy by single step using optimizer
-        pi_optimizer.zero_grad()
-        pi_loss, pi_info = compute_loss_pi(data)
-        pi_loss.backward()
-        pi_optimizer.step()
+        # Update value function multiple steps using optimizer
+        for i in range(train_pi_iters):
+            pi_optimizer.zero_grad()
+            pi_loss, pi_info = compute_loss_pi(data)
+            if pi_info['kl'] > target_kl:
+                logger.log(f'Early stopping pi update after {i} steps due to KL max.')
+                break
+            pi_loss.backward()
+            pi_optimizer.step()
 
         # Update value function multiple steps using optimizer
         for i in range(train_v_iters):
@@ -501,9 +303,7 @@ def my_ppo(env_fn, actor_critic, seed=0, epochs=10, steps_per_epoch=200,
         episode_return = 0
         episode_length = 0
         episode_count = 0
-        print(f'epoch {epoch}')
         for t in range(steps_per_epoch):
-            # print(f'step {t}')
             # Step agent given latest observation
             a, v, logprob = ac.step(torch.as_tensor(obs, dtype=torch.float32))
             # Step environment given latest agent action
@@ -542,7 +342,9 @@ def my_ppo(env_fn, actor_critic, seed=0, epochs=10, steps_per_epoch=200,
                 episode_return = 0
                 episode_length = 0
 
-
+        # Save model
+        if (epoch % save_freq == 0) or (epoch == epochs - 1):
+            logger.save_state({'env': env}, None)
         update()
 
         # Log info about epoch
@@ -583,6 +385,227 @@ def my_ppo(env_fn, actor_critic, seed=0, epochs=10, steps_per_epoch=200,
     # plt.show()
     # end_time = time.time()
     # print(f'total time: {end_time - start_time}')
+
+
+def my_ddgp(env_fn, agent_fn=DDPGAgent, seed=0, epochs=100, steps_per_epoch=4000,
+            replay_size=1000000,
+            sample_size=100,
+            start_steps=10000, update_after=1000, update_every=50, test_episodes=10,
+            log_interval=10,
+            max_episode_len=1000,
+            gamma=0.99, polyak=0.995,
+            policy_lr=1e-3, qf_lr=1e-3,
+            agent_kwargs=dict(), logger_kwargs=dict(), save_freq=10):
+    """Run DDPG training."""
+    # Initialize environment, agent, auxiliary objects
+
+    logger = EpochLogger(**logger_kwargs)
+    logger.save_config(locals())
+
+    torch.manual_seed(seed)
+    np.random.seed(seed)
+
+    env = env_fn()
+    test_env = env_fn()
+    # env.seed(seed)
+    obs_dim = env.observation_space.shape
+    act_dim = env.action_space.shape
+    agent = agent_fn(env.observation_space, env.action_space, **agent_kwargs)
+    agent_target = deepcopy(agent)
+
+    # Freeze target mu, Q so they are not updated by optimizers
+    for p in agent_target.parameters():
+        p.requires_grad = False
+
+    var_counts = tuple(core.count_vars(module) for module in [agent.policy, agent.q])
+    logger.log(f'\nNumber of parameters \t policy: {var_counts[0]} q: {var_counts[1]}\n')
+
+    buf = DDPGBuffer(obs_dim, act_dim, replay_size)
+    policy_optimizer = Adam(agent.policy.parameters(), lr=policy_lr)
+    q_optimizer = Adam(agent.q.parameters(), lr=qf_lr)
+
+    # Set up model saving
+    logger.setup_pytorch_saver(agent)
+
+    def compute_loss_policy(data):
+        # get data
+        o = data['obs']
+        # Get actions that agent policy would take at each step
+        a = agent.policy(o)
+        return -agent.q(torch.cat((o, a), dim=-1)).mean()
+
+    def compute_q_target(data):
+        r, o_next, d = data['reward'], data['obs_next'], data['done']
+        with torch.no_grad():
+            a_next = agent_target.policy(o_next)
+            q_target = agent_target.q(torch.cat((o_next, a_next), dim=-1))
+            q_target = r + gamma * (1 - d) * q_target
+        return q_target
+
+    def compute_loss_q(data, q_target):
+        o, a = data['obs'], data['act']
+        q = agent.q(torch.cat((o, a), dim=-1))
+        return ((q - q_target) ** 2).mean()
+
+    def update():
+        # Get training data from buffer
+        data = buf.get(sample_size=sample_size)
+
+
+        # Freeze policy params during Q update to save time
+        for p in agent.policy.parameters():
+            p.requires_grad = False
+        # Update Q function
+        q_optimizer.zero_grad()
+        q_target = compute_q_target(data)
+        q_loss = compute_loss_q(data, q_target)
+        q_loss.backward()
+        q_optimizer.step()
+        # Unfreeze policy params after Q update
+        for p in agent.policy.parameters():
+            p.requires_grad = True
+
+        # Freeze Q params during policy update to save time
+        for p in agent.q.parameters():
+            p.requires_grad = False
+        # Update policy
+        policy_optimizer.zero_grad()
+        policy_loss = compute_loss_policy(data)
+        policy_loss.backward()
+        policy_optimizer.step()
+        # Unfreeze Q params after policy update
+        for p in agent.q.parameters():
+            p.requires_grad = True
+
+        with torch.no_grad():
+            agent_target.q = target_update(agent.q, agent_target.q, polyak=polyak)
+            agent_target.policy = target_update(agent.policy, agent_target.policy, polyak=polyak)
+            # for p, p_targ in zip(agent.parameters(), agent_target.parameters()):
+            #     p_targ.data.mul_(polyak)
+            #     p_targ.data.add_((1 - polyak) * p.data)
+        # add logging?
+        # kl, ent = policy_info['kl'], policy_info['ent']
+        # logger.store(LossPi=policy_loss,
+        #              KL=kl, Entropy=ent,
+        #              # DeltaLossPi=policy_loss.item() - policy_loss_old,
+        #              )
+
+    def deterministic_policy_test():
+        for _ in range(test_episodes):
+            o = test_env.reset()
+            ep_ret = 0
+            ep_len = 0
+            d = False
+            while not d and not ep_len == max_episode_len:
+                with torch.no_grad():
+                    a = agent.step(torch.as_tensor(o, dtype=torch.float32), noise=False)
+                o, r, d, _ = test_env.step(a)
+                ep_ret += r
+                ep_len += 1
+            logger.store(TestEpRet=ep_ret, TestEpLen=ep_len)
+
+    start_time = time.time()
+
+    # # Run initial random exploration phase, fill buffer without updating policy.
+    # obs = env.reset()
+    # for t in range(start_steps):
+    #     # act = agent.step(torch.as_tensor(obs, dtype=torch.float32))
+    #     # Randomly (uniform) sample action space
+    #     act = env.action_space.sample()
+    #     # Step environment given latest agent action
+    #     obs_next, reward, done, _ = env.step(act)
+    #     # Store current step in buffer
+    #     buf.store(obs, act, reward, obs_next, done)
+    #     # update obs
+    #     obs = obs_next
+    #     if t % steps_per_epoch == 0:
+    #         obs = env.reset()
+
+    # print('Done exploration phase, beginning training.')
+    # Begin training phase.
+    for epoch in range(epochs):
+        # Start a new epoch
+        obs = env.reset()
+        episode_return = 0
+        episode_length = 0
+        # episode_count = 0
+        for t in range(steps_per_epoch):
+            # print(f'step {t}')
+            # Step agent given latest observation
+            if t < start_steps and epoch == 0:
+                act = env.action_space.sample()
+            else:
+                act = agent.step(torch.as_tensor(obs, dtype=torch.float32), noise=True)
+            # Step environment given latest agent action
+            obs_next, reward, done, _ = env.step(act)
+
+            episode_return += reward
+            episode_length += 1
+
+            # Store current step in buffer
+            buf.store(obs, act, reward, obs_next, done)
+
+            # update episode return and env state
+            obs = obs_next
+
+            # check if episode is over
+            episode_capped = (episode_length == max_episode_len)
+            epoch_ended = (t == steps_per_epoch - 1)
+            end_episode = (done or episode_capped or epoch_ended)
+            if end_episode:
+                # episode_count += 1
+                if done or episode_capped:
+                    logger.store(EpRet=episode_return, EpLen=episode_length)
+                obs = env.reset()
+                episode_return = 0
+                episode_length = 0
+
+            if t >= update_after and (t+1) % update_every == 0:
+                # update_start = time.time()
+                for _ in range(update_every):
+                    update()
+                # update_end = time.time()
+                # print(f'update time {update_end - update_start}')
+
+        deterministic_policy_test()
+        # Save model
+        if (epoch % save_freq == 0) or (epoch == epochs - 1):
+            logger.save_state({'env': env}, None)
+
+
+        # Log info about epoch
+        logger.log_tabular('Epoch', epoch)
+        logger.log_tabular('EpRet', with_min_and_max=True)
+        logger.log_tabular('TestEpRet', with_min_and_max=True)
+        logger.log_tabular('EpLen', average_only=True)
+        logger.log_tabular('TestEpLen', average_only=True)
+        # logger.log_tabular('VVals', with_min_and_max=True)
+        logger.log_tabular('TotalEnvInteracts', (epoch+1)*steps_per_epoch)
+        # logger.log_tabular('LossPi', average_only=True)
+        # logger.log_tabular('LossV', average_only=True)
+        # logger.log_tabular('DeltaLossPi', average_only=True)
+        # logger.log_tabular('DeltaLossV', average_only=True)
+        # logger.log_tabular('Entropy', average_only=True)
+        # logger.log_tabular('KL', average_only=True)
+        logger.log_tabular('Time', time.time()-start_time)
+        logger.dump_tabular()
+
+        # update running avg of episode score and training trajectory buffer
+        # running_avg_return = running_avg_return * 0.9 + episode_return * 0.1
+        # training_records.append(TrainingRecord(i_ep, running_reward))
+
+        # # Print running avg episode score at end of episode
+        # if i_ep % log_interval == 0:
+        #     print('Ep {}\tMoving average score: {:.2f}\t'.format(i_ep, running_reward))
+        # if running_reward > -200:
+        #     print("Solved! Moving average score is now {}!".format(running_reward))
+        #     env.close()
+        #     #             ac.save_param()
+        #     #             with open('log/ppo_training_records.pkl', 'wb') as f:
+        #     #                 pickle.dump(training_records, f)
+        #     break
+
+
 
 
 

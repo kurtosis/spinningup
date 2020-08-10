@@ -278,9 +278,12 @@ def ddpg(env_fn, actor_critic=core.MLPActorCritic, ac_kwargs=dict(), seed=0,
 
         # Update handling
         if t >= update_after and t % update_every == 0:
+            # update_start = time.time()
             for _ in range(update_every):
                 batch = replay_buffer.sample_batch(batch_size)
                 update(data=batch)
+            # update_end = time.time()
+            # print(f'update time {update_end - update_start}')
 
         # End of epoch handling
         if (t+1) % steps_per_epoch == 0:
