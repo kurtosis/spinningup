@@ -7,8 +7,8 @@ import torch.nn as nn
 
 def mlp(layer_sizes, hidden_activation, final_activation):
     layers = []
-    for i in range(len(layer_sizes)-1):
-        layers.append(nn.Linear(layer_sizes[i], layer_sizes[i+1]))
+    for i in range(len(layer_sizes) - 1):
+        layers.append(nn.Linear(layer_sizes[i], layer_sizes[i + 1]))
         if i < len(layer_sizes) - 2:
             layers.append(hidden_activation())
         else:
@@ -62,7 +62,7 @@ class ValueCritic(nn.Module):
 
     def forward(self, x):
         v = self.v_net(x)
-        return torch.squeeze(v, -1) # Critical to ensure v has right shape.
+        return torch.squeeze(v, -1)  # Critical to ensure v has right shape.
 
 
 class ContinuousEstimator(nn.Module):
@@ -83,7 +83,7 @@ class ContinuousEstimator(nn.Module):
 
     def forward(self, x):
         output = self.net(x)
-        return torch.squeeze(output, -1) # Critical to ensure v has right shape.
+        return torch.squeeze(output, -1)  # Critical to ensure v has right shape.
 
 
 class BoundedContinuousActor(nn.Module):
@@ -102,7 +102,7 @@ class BoundedContinuousActor(nn.Module):
         self.net = mlp(layer_sizes, activation, nn.Tanh)
 
     def forward(self, x):
-        output = (self.net(x) + 1)*self.width/2 + self.low
+        output = (self.net(x) + 1) * self.width / 2 + self.low
         return output
 
 
@@ -114,7 +114,7 @@ class GaussianActorCritic(nn.Module):
 
     def __init__(self, observation_space, action_space,
                  hidden_layers_mu=[100], hidden_layers_sigma=[100], hidden_layers_v=[100],
-                 activation = nn.Tanh,
+                 activation=nn.Tanh,
                  **kwargs):
         super().__init__()
         obs_dim = observation_space.shape[0]
@@ -122,7 +122,8 @@ class GaussianActorCritic(nn.Module):
         layer_sizes_mu = [obs_dim] + hidden_layers_mu + [act_dim]
         layer_sizes_sigma = [obs_dim] + hidden_layers_sigma + [act_dim]
         layer_sizes_v = [obs_dim] + hidden_layers_v + [1]
-        self.pi = GaussianActor(layer_sizes_mu=layer_sizes_mu, layer_sizes_sigma=layer_sizes_sigma, activation=activation)
+        self.pi = GaussianActor(layer_sizes_mu=layer_sizes_mu, layer_sizes_sigma=layer_sizes_sigma,
+                                activation=activation)
         self.v = ValueCritic(layer_sizes_v=layer_sizes_v, activation=activation)
 
     def step(self, obs):
@@ -149,7 +150,7 @@ class DDPGAgent(nn.Module):
     """
 
     def __init__(self, observation_space, action_space,
-                 hidden_layers_mu=[256,256], hidden_layers_q=[256,256],
+                 hidden_layers_mu=[256, 256], hidden_layers_q=[256, 256],
                  activation=nn.ReLU,
                  final_activation=nn.Tanh,
                  noise_std=0.1, gamma=0.9,
@@ -166,35 +167,70 @@ class DDPGAgent(nn.Module):
         self.noise_std = noise_std
         self.gamma = gamma
         self.policy = BoundedContinuousActor(layer_sizes=layer_sizes_mu, activation=activation,
-                                             final_activation=final_activation, low=self.act_low, high=self.act_high, **kwargs)
+                                             final_activation=final_activation, low=self.act_low, high=self.act_high,
+                                             **kwargs)
         self.q = ContinuousEstimator(layer_sizes=layer_sizes_q, activation=activation, **kwargs)
 
-    def act(self, obs):
-        """Return deterministic action as numpy array, **without computing grads**"""
-        with torch.no_grad():
-            return self.policy(obs).numpy()
-
-    def step(self, obs, noise=False):
+    def act(self, obs, noise=False):
         """Return noisy action as numpy array, **without computing grads**"""
+        # TO DO: fix how noise and clipping are handled for multiple dimensions.
         with torch.no_grad():
             act = self.policy(obs)
             if noise:
                 act += self.noise_std * np.random.randn(self.act_dim)
-            # Assumes all action dimensions have same low/high bounds!
-            # TO DO - rewrite so different bounds can be used, account for diff act batch sizes
-            # act = act.clamp(self.act_low[0], self.act_high[0])
             act = np.clip(act.numpy(), self.act_low[0], self.act_high[0])
-            # Below doesn't work with batch size > 1
-            # for i in range(len(act)):
-            #     act[i].clamp(self.act_low[i], self.act_high[i])
         return act
+
+
+class TD3Agent(nn.Module):
+    """
+    Agent to be used in TD3.
+    Contains:
+    - estimated Q*(s,a,)
+    - policy
+
+    """
+
+    def __init__(self, observation_space, action_space,
+                 hidden_layers_mu=[256, 256], hidden_layers_q=[256, 256],
+                 activation=nn.ReLU,
+                 final_activation=nn.Tanh,
+                 noise_std=0.1, gamma=0.9,
+                 **kwargs):
+        super().__init__()
+        obs_dim = observation_space.shape[0]
+        act_dim = action_space.shape[0]
+        self.act_dim = action_space.shape[0]
+        self.act_low = action_space.low
+        self.act_high = action_space.high
+
+        layer_sizes_mu = [obs_dim] + hidden_layers_mu + [act_dim]
+        layer_sizes_q = [obs_dim + act_dim] + hidden_layers_q + [1]
+        self.noise_std = noise_std
+        self.gamma = gamma
+        self.policy = BoundedContinuousActor(layer_sizes=layer_sizes_mu, activation=activation,
+                                             final_activation=final_activation, low=self.act_low, high=self.act_high,
+                                             **kwargs)
+        self.q1 = ContinuousEstimator(layer_sizes=layer_sizes_q, activation=activation, **kwargs)
+        self.q2 = ContinuousEstimator(layer_sizes=layer_sizes_q, activation=activation, **kwargs)
+
+    def act(self, obs, noise=False):
+        """Return noisy action as numpy array, **without computing grads**"""
+        # TO DO: fix how noise and clipping are handled for multiple dimensions.
+        with torch.no_grad():
+            act = self.policy(obs)
+            if noise:
+                act += self.noise_std * np.random.randn(self.act_dim)
+            act = np.clip(act.numpy(), self.act_low[0], self.act_high[0])
+        return act
+
 
 
 def discount_cumsum(x, discount):
     """Compute cumsum with discounting used in GAE (generalized adv estimn).
     (My implementation)"""
     discounts = [discount ** ll for ll in range(len(x))]
-    disc_seqs = [discounts] + [discounts[:-i] for i in range(1,len(x))]
+    disc_seqs = [discounts] + [discounts[:-i] for i in range(1, len(x))]
     return np.array([np.dot(x[i:], disc_seqs[i]) for i in range(len(x))])
 
 
@@ -304,7 +340,7 @@ class DDPGBuffer:
             self.ptr = self.ptr % self.max_size
             self.full = True
         if not self.full:
-            self.filled_size +=1
+            self.filled_size += 1
         self.obs[self.ptr] = obs
         self.act[self.ptr] = act
         self.reward[self.ptr] = reward

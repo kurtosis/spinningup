@@ -4,26 +4,37 @@ import time
 import gym
 
 from spinup import vpg_pytorch, ppo_pytorch, ddpg_pytorch
+
 # from spinup.algos.pytorch.vpg.core import *
 # from spinup.algos.pytorch.ppo.core import *
 from spinup.algos.pytorch.ddpg.core import *
 
 from spinup.agents.my_agents import *
 from spinup.agents.training_algos import *
+from spinup.agents.my_td3 import *
 
-from spinup.user_config import DEFAULT_DATA_DIR, FORCE_DATESTAMP, \
-                               DEFAULT_SHORTHAND, WAIT_BEFORE_LAUNCH
+from spinup.user_config import (
+    DEFAULT_DATA_DIR,
+    FORCE_DATESTAMP,
+    DEFAULT_SHORTHAND,
+    WAIT_BEFORE_LAUNCH,
+)
 from spinup.utils.logx import colorize
 
 DIV_LINE_WIDTH = 80
 
 
 def create_output_msg(logger_kwargs):
-    plot_cmd = 'python -m spinup.run plot ' + logger_kwargs['output_dir']
-    plot_cmd = colorize(plot_cmd, 'green')
-    test_cmd = 'python -m spinup.run test_policy ' + logger_kwargs['output_dir']
-    test_cmd = colorize(test_cmd, 'green')
-    output_msg = '\n' * 5 + '=' * DIV_LINE_WIDTH + '\n' + dedent("""\
+    plot_cmd = "python -m spinup.run plot " + logger_kwargs["output_dir"]
+    plot_cmd = colorize(plot_cmd, "green")
+    test_cmd = "python -m spinup.run test_policy " + logger_kwargs["output_dir"]
+    test_cmd = colorize(test_cmd, "green")
+    output_msg = (
+        "\n" * 5
+        + "=" * DIV_LINE_WIDTH
+        + "\n"
+        + dedent(
+            """\
     End of experiment.
     
     
@@ -37,21 +48,28 @@ def create_output_msg(logger_kwargs):
     %s
     
     
-    """ % (plot_cmd, test_cmd)) + '=' * DIV_LINE_WIDTH + '\n' * 5
+    """
+            % (plot_cmd, test_cmd)
+        )
+        + "=" * DIV_LINE_WIDTH
+        + "\n" * 5
+    )
     return output_msg
 
 
-env_str = 'HalfCheetah-v3'
+# env_str = "HalfCheetah-v3"
 # env_str = 'Pendulum-v0'
 # env_str = 'Hopper-v3'
 # env_str = 'Swimmer-v3'
-env_dir = env_str.lower().replace('-','_')
-output_dir = f'{DEFAULT_DATA_DIR}/{env_dir}/{int(time.time())}'
-logger_kwargs = {'output_dir': output_dir}
-ac_kwargs={
-    'hidden_layers_mu' : [64,64],
-    'hidden_layers_sigma' : [64,64],
-    'hidden_layers_v' : [64,64],
+# env_str = 'Walker2d-v3'
+env_str = 'Ant-v3'
+env_dir = env_str.lower().replace("-", "_")
+output_dir = f"{DEFAULT_DATA_DIR}/{env_dir}/{int(time.time())}"
+logger_kwargs = {"output_dir": output_dir}
+ac_kwargs = {
+    "hidden_layers_mu": [64, 64],
+    "hidden_layers_sigma": [64, 64],
+    "hidden_layers_v": [64, 64],
 }
 
 output_msg = create_output_msg(logger_kwargs)
@@ -92,12 +110,24 @@ seed = 310
 # my_ppo(lambda: gym.make(env_str), actor_critic=actor_critic, ac_kwargs=ac_kwargs, seed=seed,
 #        steps_per_epoch=4000, epochs=120, logger_kwargs=logger_kwargs, save_freq=10)
 
-my_ddgp(lambda: gym.make(env_str), agent_fn=DDPGAgent, seed=seed, epochs=3, logger_kwargs=logger_kwargs,
+my_ddgp(lambda: gym.make(env_str), agent_fn=DDPGAgent, seed=seed, epochs=25, logger_kwargs=logger_kwargs,
         save_freq=10)
 
 # ddpg_pytorch(lambda: gym.make(env_str), actor_critic=MLPActorCritic, seed=seed, epochs=20,
 #              logger_kwargs=logger_kwargs)
 # # #              # steps_per_epoch=400, max_ep_len=100
 #              )
+
+
+# my_td3(
+#     lambda: gym.make(env_str),
+#     agent_fn=TD3Agent,
+#     seed=seed,
+#     epochs=25,
+#     logger_kwargs=logger_kwargs,
+#     # steps_per_epoch=200,
+#     # max_episode_len=100,
+#     save_freq=10,
+# )
 
 print(output_msg)
