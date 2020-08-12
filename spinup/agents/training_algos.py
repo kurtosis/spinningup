@@ -238,14 +238,14 @@ def my_ppo(
     env_fn,
     actor_critic,
     seed=0,
-    epochs=10,
-    steps_per_epoch=200,
+    epochs=50,
+    steps_per_epoch=4000,
     log_interval=10,
     render=False,
-    max_episode_len=100,
+    max_episode_len=1000,
     gamma=0.99,
     lam=0.97,
-    train_pi_iters=100,
+    train_pi_iters=80,
     train_v_iters=80,
     pi_lr=3e-4,
     vf_lr=1e-3,
@@ -486,7 +486,7 @@ def my_ddgp(
         f"\nNumber of parameters \t policy: {var_counts[0]} q: {var_counts[1]}\n"
     )
 
-    buf = DDPGBuffer(obs_dim, act_dim, replay_size)
+    buf = TransitionBuffer(obs_dim, act_dim, replay_size)
     policy_optimizer = Adam(agent.policy.parameters(), lr=policy_lr)
     q_optimizer = Adam(agent.q.parameters(), lr=qf_lr)
 

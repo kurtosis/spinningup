@@ -85,7 +85,7 @@ def my_td3(
         f"\nNumber of parameters \t policy: {var_counts[0]} q1/q2: {var_counts[1]}\n"
     )
 
-    buf = DDPGBuffer(obs_dim, act_dim, replay_size)
+    buf = TransitionBuffer(obs_dim, act_dim, replay_size)
     policy_optimizer = Adam(agent.policy.parameters(), lr=policy_lr)
     q1_optimizer = Adam(agent.q1.parameters(), lr=qf_lr)
     q2_optimizer = Adam(agent.q2.parameters(), lr=qf_lr)
@@ -106,7 +106,7 @@ def my_td3(
             a_next = agent_target.policy(o_next)
             noise = np.random.randn(*a_next.shape) * target_noise_std
             noise = np.clip(noise, -target_clip, +target_clip)
-            a_next += noise.astype('float32')
+            a_next += noise.astype("float32")
             a_next = np.clip(a_next, act_low, act_high)
             q1_target = agent_target.q1(torch.cat((o_next, a_next), dim=-1))
             q2_target = agent_target.q2(torch.cat((o_next, a_next), dim=-1))
@@ -142,7 +142,6 @@ def my_td3(
             **q2_loss_info,
         )
 
-
         if i % policy_delay == 0:
             # Freeze Q params during policy update to save time
             for p in agent.q1.parameters():
@@ -170,10 +169,7 @@ def my_td3(
                 agent_target.policy = target_update(
                     agent.policy, agent_target.policy, polyak=polyak
                 )
-            logger.store(
-                LossPi=policy_loss.item(),
-            )
-
+            logger.store(LossPi=policy_loss.item(),)
 
     def deterministic_policy_test():
         for _ in range(test_episodes):

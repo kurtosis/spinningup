@@ -1,7 +1,8 @@
 import numpy as np
 
 import torch
-from torch.distributions import Beta, Uniform, Normal
+from torch.distributions import Normal
+import torch.nn.functional as F
 import torch.nn as nn
 
 
@@ -82,6 +83,7 @@ class ContinuousEstimator(nn.Module):
         self.net = mlp(layer_sizes, activation, final_activation)
 
     def forward(self, x):
+        # x should contain [obs, act]
         output = self.net(x)
         return torch.squeeze(output, -1)  # Critical to ensure v has right shape.
 
@@ -112,18 +114,27 @@ class GaussianActorCritic(nn.Module):
     and a critic (to estimate value function)
     """
 
-    def __init__(self, observation_space, action_space,
-                 hidden_layers_mu=[100], hidden_layers_sigma=[100], hidden_layers_v=[100],
-                 activation=nn.Tanh,
-                 **kwargs):
+    def __init__(
+        self,
+        observation_space,
+        action_space,
+        hidden_layers_mu=[100],
+        hidden_layers_sigma=[100],
+        hidden_layers_v=[100],
+        activation=nn.Tanh,
+        **kwargs
+    ):
         super().__init__()
         obs_dim = observation_space.shape[0]
         act_dim = action_space.shape[0]
         layer_sizes_mu = [obs_dim] + hidden_layers_mu + [act_dim]
         layer_sizes_sigma = [obs_dim] + hidden_layers_sigma + [act_dim]
         layer_sizes_v = [obs_dim] + hidden_layers_v + [1]
-        self.pi = GaussianActor(layer_sizes_mu=layer_sizes_mu, layer_sizes_sigma=layer_sizes_sigma,
-                                activation=activation)
+        self.pi = GaussianActor(
+            layer_sizes_mu=layer_sizes_mu,
+            layer_sizes_sigma=layer_sizes_sigma,
+            activation=activation,
+        )
         self.v = ValueCritic(layer_sizes_v=layer_sizes_v, activation=activation)
 
     def step(self, obs):
@@ -149,12 +160,18 @@ class DDPGAgent(nn.Module):
 
     """
 
-    def __init__(self, observation_space, action_space,
-                 hidden_layers_mu=[256, 256], hidden_layers_q=[256, 256],
-                 activation=nn.ReLU,
-                 final_activation=nn.Tanh,
-                 noise_std=0.1, gamma=0.9,
-                 **kwargs):
+    def __init__(
+        self,
+        observation_space,
+        action_space,
+        hidden_layers_mu=[256, 256],
+        hidden_layers_q=[256, 256],
+        activation=nn.ReLU,
+        final_activation=nn.Tanh,
+        noise_std=0.1,
+        gamma=0.9,
+        **kwargs
+    ):
         super().__init__()
         obs_dim = observation_space.shape[0]
         act_dim = action_space.shape[0]
@@ -166,10 +183,17 @@ class DDPGAgent(nn.Module):
         layer_sizes_q = [obs_dim + act_dim] + hidden_layers_q + [1]
         self.noise_std = noise_std
         self.gamma = gamma
-        self.policy = BoundedContinuousActor(layer_sizes=layer_sizes_mu, activation=activation,
-                                             final_activation=final_activation, low=self.act_low, high=self.act_high,
-                                             **kwargs)
-        self.q = ContinuousEstimator(layer_sizes=layer_sizes_q, activation=activation, **kwargs)
+        self.policy = BoundedContinuousActor(
+            layer_sizes=layer_sizes_mu,
+            activation=activation,
+            final_activation=final_activation,
+            low=self.act_low,
+            high=self.act_high,
+            **kwargs
+        )
+        self.q = ContinuousEstimator(
+            layer_sizes=layer_sizes_q, activation=activation, **kwargs
+        )
 
     def act(self, obs, noise=False):
         """Return noisy action as numpy array, **without computing grads**"""
@@ -191,12 +215,18 @@ class TD3Agent(nn.Module):
 
     """
 
-    def __init__(self, observation_space, action_space,
-                 hidden_layers_mu=[256, 256], hidden_layers_q=[256, 256],
-                 activation=nn.ReLU,
-                 final_activation=nn.Tanh,
-                 noise_std=0.1, gamma=0.9,
-                 **kwargs):
+    def __init__(
+        self,
+        observation_space,
+        action_space,
+        hidden_layers_mu=[256, 256],
+        hidden_layers_q=[256, 256],
+        activation=nn.ReLU,
+        final_activation=nn.Tanh,
+        noise_std=0.1,
+        gamma=0.9,
+        **kwargs
+    ):
         super().__init__()
         obs_dim = observation_space.shape[0]
         act_dim = action_space.shape[0]
@@ -208,11 +238,20 @@ class TD3Agent(nn.Module):
         layer_sizes_q = [obs_dim + act_dim] + hidden_layers_q + [1]
         self.noise_std = noise_std
         self.gamma = gamma
-        self.policy = BoundedContinuousActor(layer_sizes=layer_sizes_mu, activation=activation,
-                                             final_activation=final_activation, low=self.act_low, high=self.act_high,
-                                             **kwargs)
-        self.q1 = ContinuousEstimator(layer_sizes=layer_sizes_q, activation=activation, **kwargs)
-        self.q2 = ContinuousEstimator(layer_sizes=layer_sizes_q, activation=activation, **kwargs)
+        self.policy = BoundedContinuousActor(
+            layer_sizes=layer_sizes_mu,
+            activation=activation,
+            final_activation=final_activation,
+            low=self.act_low,
+            high=self.act_high,
+            **kwargs
+        )
+        self.q1 = ContinuousEstimator(
+            layer_sizes=layer_sizes_q, activation=activation, **kwargs
+        )
+        self.q2 = ContinuousEstimator(
+            layer_sizes=layer_sizes_q, activation=activation, **kwargs
+        )
 
     def act(self, obs, noise=False):
         """Return noisy action as numpy array, **without computing grads**"""
@@ -224,6 +263,95 @@ class TD3Agent(nn.Module):
             act = np.clip(act.numpy(), self.act_low[0], self.act_high[0])
         return act
 
+
+class TanhStochasticActor(nn.Module):
+    """
+    Produces a squashed Normal distribution for one var from a MLP for mu and sigma.
+    """
+
+    def __init__(
+        self,
+        layer_sizes,
+        act_dim,
+        low,
+        high,
+        activation=nn.ReLU,
+        log_sigma_min=-20,
+        log_sigma_max=2,
+    ):
+        super().__init__()
+        self.low = torch.as_tensor(low)
+        self.width = torch.as_tensor(high - low)
+        self.shared_net = mlp(layer_sizes, activation, activation)
+        self.mu_layer = nn.Linear(layer_sizes[-1], act_dim, activation)
+        self.log_sigma_layer = nn.Linear(layer_sizes[-1], act_dim, activation)
+        self.log_sigma_min = log_sigma_min
+        self.log_sigma_max = log_sigma_max
+
+    def forward(self, obs, deterministic=False, get_logprob=False):
+        shared = self.shared_net(obs)
+        mu = self.mu_layer(shared)
+        log_sigma = self.log_sigma_layer(shared)
+        log_sigma = torch.clamp(log_sigma, self.log_sigma_min, self.log_sigma_max)
+        sigma = torch.exp(log_sigma)
+        pi = Normal(mu, sigma)
+        if deterministic:
+            # For evaluating performance at end of epoch, not for data collection
+            act = mu
+        else:
+            act = pi.rsample()
+        logprob = None
+        if get_logprob:
+            logprob = pi.log_prob(act).sum(axis=-1)
+            # Convert pdf due to tanh transform
+            logprob -= (2 * (np.log(2) - act - F.softplus(-2 * act))).sum(axis=1)
+        act = torch.tanh(act)
+        act = (act + 1) * self.width / 2 + self.low
+        return act, logprob
+
+
+class SACAgent(nn.Module):
+    """
+    Agent to be used in SAC.
+    Contains:
+    - stochastic policy (bounded by tanh)
+    - estimated Q*(s,a,)
+    """
+
+    def __init__(
+        self,
+        observation_space,
+        action_space,
+        hidden_layers_pi=[256, 256],
+        hidden_layers_q=[256, 256],
+        activation=nn.ReLU,
+        **kwargs
+    ):
+        super().__init__()
+        obs_dim = observation_space.shape[0]
+        act_dim = action_space.shape[0]
+        layer_sizes_pi = [obs_dim] + hidden_layers_pi
+        layer_sizes_q = [obs_dim + act_dim] + hidden_layers_q + [1]
+        self.policy = TanhStochasticActor(
+            layer_sizes_pi,
+            act_dim,
+            action_space.low,
+            action_space.high,
+            activation=activation,
+            **kwargs
+        )
+        self.q1 = ContinuousEstimator(
+            layer_sizes=layer_sizes_q, activation=activation, **kwargs
+        )
+        self.q2 = ContinuousEstimator(
+            layer_sizes=layer_sizes_q, activation=activation, **kwargs
+        )
+
+    def act(self, obs, deterministic=False):
+        """Return noisy action as numpy array, **without computing grads**"""
+        with torch.no_grad():
+            act, _ = self.policy(obs, deterministic=deterministic)
+        return act.numpy()
 
 
 def discount_cumsum(x, discount):
@@ -310,22 +438,22 @@ class TrajectoryBuffer:
         self.adv = (self.adv - adv_mean) / adv_std
         # return needed variables as a dictionary
         data = {
-            'obs': self.obs,
-            'act': self.act,
-            'adv': self.adv,
-            'ret': self.ret,
-            'logprob': self.logprob,
+            "obs": self.obs,
+            "act": self.act,
+            "adv": self.adv,
+            "ret": self.ret,
+            "logprob": self.logprob,
         }
         data = {k: torch.as_tensor(v, dtype=torch.float32) for k, v in data.items()}
         return data
 
 
-class DDPGBuffer:
+class TransitionBuffer:
     def __init__(self, obs_dim, act_dim, size):
         self.obs = np.zeros(merge_shape(size, obs_dim), dtype=np.float32)
-        self.obs_next = np.zeros(merge_shape(size, obs_dim), dtype=np.float32)
         self.act = np.zeros(merge_shape(size, act_dim), dtype=np.float32)
         self.reward = np.zeros(size, dtype=np.float32)
+        self.obs_next = np.zeros(merge_shape(size, obs_dim), dtype=np.float32)
         self.done = np.zeros(size, dtype=np.float32)
         self.ptr = 0
         self.max_size = size
@@ -339,16 +467,16 @@ class DDPGBuffer:
         if self.ptr >= self.max_size:
             self.ptr = self.ptr % self.max_size
             self.full = True
-        if not self.full:
-            self.filled_size += 1
         self.obs[self.ptr] = obs
         self.act[self.ptr] = act
         self.reward[self.ptr] = reward
         self.obs_next[self.ptr] = obs_next
         self.done[self.ptr] = done
         self.ptr += 1
+        if not self.full:
+            self.filled_size += 1
 
-    def get(self, sample_size=None):
+    def get(self, sample_size=100):
         """
         Return needed variables (as tensors) over episodes in buffer.
         Reset pointers for next epoch.
@@ -357,21 +485,14 @@ class DDPGBuffer:
         # if not self.full:
         #     raise Exception('Buffer cannot be sampled until it is full.')
         # return needed variables as a dictionary
-        if sample_size is None:
-            data = {
-                'obs': torch.as_tensor(self.obs, dtype=torch.float32),
-                'act': torch.as_tensor(self.act, dtype=torch.float32),
-                'reward': torch.as_tensor(self.reward, dtype=torch.float32),
-                'obs_next': torch.as_tensor(self.obs_next, dtype=torch.float32),
-                'done': torch.as_tensor(self.done, dtype=torch.float32),
-            }
-        else:
-            sample_indexes = np.random.randint(0, self.filled_size, sample_size)
-            data = {
-                'obs': torch.as_tensor(self.obs[sample_indexes], dtype=torch.float32),
-                'act': torch.as_tensor(self.act[sample_indexes], dtype=torch.float32),
-                'reward': torch.as_tensor(self.reward[sample_indexes], dtype=torch.float32),
-                'obs_next': torch.as_tensor(self.obs_next[sample_indexes], dtype=torch.float32),
-                'done': torch.as_tensor(self.done[sample_indexes], dtype=torch.float32),
-            }
+        sample_indexes = np.random.randint(0, self.filled_size, sample_size)
+        data = {
+            "obs": torch.as_tensor(self.obs[sample_indexes], dtype=torch.float32),
+            "act": torch.as_tensor(self.act[sample_indexes], dtype=torch.float32),
+            "reward": torch.as_tensor(self.reward[sample_indexes], dtype=torch.float32),
+            "obs_next": torch.as_tensor(
+                self.obs_next[sample_indexes], dtype=torch.float32
+            ),
+            "done": torch.as_tensor(self.done[sample_indexes], dtype=torch.float32),
+        }
         return data
