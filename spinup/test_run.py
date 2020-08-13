@@ -58,12 +58,7 @@ def create_output_msg(logger_kwargs):
     return output_msg
 
 
-# env_str = "HalfCheetah-v3"
-# env_str = 'Pendulum-v0'
 env_str = "Hopper-v3"
-# env_str = 'Swimmer-v3'
-# env_str = 'Walker2d-v3'
-# env_str = "Ant-v3"
 env_list = ["Walker2d-v3", "Ant-v3", "Hopper-v3", "HalfCheetah-v3", "Swimmer-v3"]
 # env_list = ["Hopper-v3",]
 
@@ -79,82 +74,58 @@ def logging_info(env_str, subdir=None):
     return logger_kwargs, output_msg
 
 
-# ac_kwargs = {
-#     "hidden_layers_mu": [64, 64],
-#     "hidden_layers_sigma": [64, 64],
-#     "hidden_layers_v": [64, 64],
-# }
-# output_msg = create_output_msg(logger_kwargs)
-
-
-# actor_critic = GaussianActorCritic
-# actor_critic = MLPActorCritic
-
-# if actor_critic == GaussianActorCritic:
-#     ac_kwargs = {
-#         'hidden_layers_mu': [64, 64],
-#         # 'hidden_layers_sigma': [64, 64],
-#         'hidden_layers_sigma': [32],
-#         'hidden_layers_v': [64, 64],
-#     }
-# else:
-#     ac_kwargs = {}
-
 ac_kwargs = {}
 
 seed = 4153
-
 epochs = 100
-# steps_per_epoch = 1049 # this fails, too few steps, no QVals
 steps_per_epoch = 4000
 runs_per_method = 2
+runs_per_method_ppo = 4
 
+# PPO only (fast)
+# for env_str in env_list:
+#     for i in range(runs_per_method_ppo):
+#         seed += 1
+#         print(f"ppo {env_str}")
+#         logger_kwargs, output_msg = logging_info(env_str, subdir="ppo")
+#         my_ppo(
+#             lambda: gym.make(env_str),
+#             seed=seed,
+#             epochs=epochs,
+#             steps_per_epoch=steps_per_epoch,
+#             logger_kwargs=logger_kwargs,
+#         )
+#         print(f"ppo {env_str}")
+#         # print(output_msg)
+#
+#         seed += 1
+#         print(f"spinningup ppo {env_str}")
+#         logger_kwargs, output_msg = logging_info(env_str, subdir="su_ppo")
+#         ppo_pytorch(
+#             lambda: gym.make(env_str),
+#             seed=seed,
+#             epochs=epochs,
+#             steps_per_epoch=steps_per_epoch,
+#             logger_kwargs=logger_kwargs,
+#         )
+#         print(f"spinningup ppo {env_str}")
+#         # print(output_msg)
+
+# non-PPO methods
 for env_str in env_list:
-
     for i in range(runs_per_method):
-
-        seed += 1
-        print(f"ddpg {env_str}")
-        logger_kwargs, output_msg = logging_info(env_str, subdir="ddpg")
-        my_ddgp(
-            lambda: gym.make(env_str),
-            agent_fn=DDPGAgent,
-            seed=seed,
-            epochs=epochs,
-            steps_per_epoch=steps_per_epoch,
-            logger_kwargs=logger_kwargs,
-            save_freq=10,
-        )
-        print(f"ddpg {env_str}")
-        print(output_msg)
-
-        seed += 1
-        print(f"spinningup ddpg {env_str}")
-        logger_kwargs, output_msg = logging_info(env_str, subdir="su_ddpg")
-        ddpg_pytorch(
-            lambda: gym.make(env_str),
-            seed=seed,
-            epochs=epochs,
-            steps_per_epoch=steps_per_epoch,
-            logger_kwargs=logger_kwargs,
-        )
-        print(f"spinningup ddpg {env_str}")
-        print(output_msg)
-
         seed += 1
         print(f"td3 {env_str}")
         logger_kwargs, output_msg = logging_info(env_str, subdir="td3")
         my_td3(
             lambda: gym.make(env_str),
-            agent_fn=TD3Agent,
             seed=seed,
             epochs=epochs,
             steps_per_epoch=steps_per_epoch,
             logger_kwargs=logger_kwargs,
-            save_freq=10,
         )
         print(f"td3 {env_str}")
-        print(output_msg)
+        # print(output_msg)
 
         seed += 1
         print(f"spinningup td3 {env_str}")
@@ -167,21 +138,20 @@ for env_str in env_list:
             logger_kwargs=logger_kwargs,
         )
         print(f"spinningup td3 {env_str}")
-        print(output_msg)
+        # print(output_msg)
 
         seed += 1
         print(f"sac {env_str}")
         logger_kwargs, output_msg = logging_info(env_str, subdir="sac")
         my_sac(
             lambda: gym.make(env_str),
-            agent_fn=SACAgent,
             seed=seed,
             epochs=epochs,
             steps_per_epoch=steps_per_epoch,
             logger_kwargs=logger_kwargs,
         )
         print(f"sac {env_str}")
-        print(output_msg)
+        # print(output_msg)
 
         seed += 1
         print(f"spinningup sac {env_str}")
@@ -194,36 +164,33 @@ for env_str in env_list:
             logger_kwargs=logger_kwargs,
         )
         print(f"spinningup sac {env_str}")
-        print(output_msg)
+        # print(output_msg)
 
         seed += 1
-        print(f'ppo {env_str}')
-        logger_kwargs, output_msg = logging_info(env_str, subdir='ppo')
-        my_ppo(
-            lambda: gym.make(env_str),
-            actor_critic=GaussianActorCritic,
-            ac_kwargs=ac_kwargs,
-            seed=seed,
-            epochs=epochs,
-            steps_per_epoch=steps_per_epoch,
-            logger_kwargs=logger_kwargs,
-            save_freq=10,
-        )
-        print(f'ppo {env_str}')
-        print(output_msg)
-
-        seed += 1
-        print(f'spinningup ppo {env_str}')
-        logger_kwargs, output_msg = logging_info(env_str, subdir='su_ppo')
-        ppo_pytorch(
+        print(f"ddpg {env_str}")
+        logger_kwargs, output_msg = logging_info(env_str, subdir="ddpg")
+        my_ddgp(
             lambda: gym.make(env_str),
             seed=seed,
             epochs=epochs,
             steps_per_epoch=steps_per_epoch,
             logger_kwargs=logger_kwargs,
         )
-        print(f'spinningup ppo {env_str}')
-        print(output_msg)
+        print(f"ddpg {env_str}")
+        # print(output_msg)
+
+        seed += 1
+        print(f"spinningup ddpg {env_str}")
+        logger_kwargs, output_msg = logging_info(env_str, subdir="su_ddpg")
+        ddpg_pytorch(
+            lambda: gym.make(env_str),
+            seed=seed,
+            epochs=epochs,
+            steps_per_epoch=steps_per_epoch,
+            logger_kwargs=logger_kwargs,
+        )
+        print(f"spinningup ddpg {env_str}")
+        # print(output_msg)
 
 
 # vpg_pytorch(lambda: gym.make(env_str), actor_critic=actor_critic, seed=seed,

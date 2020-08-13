@@ -34,7 +34,7 @@ def target_update(net_main, net_target, polyak=0.9):
 
 def my_td3(
     env_fn,
-    agent_fn=DDPGAgent,
+    agent_fn=TD3Agent,
     seed=0,
     epochs=100,
     steps_per_epoch=4000,

@@ -15,9 +15,13 @@ import time
 import torch
 from torch.optim import Adam
 
-import spinup.algos.pytorch.vpg.core as core
+# import spinup.algos.pytorch.vpg.core as core
 from spinup.agents.my_agents import *
 from spinup.utils.logx import EpochLogger
+
+
+def count_vars(module):
+    return sum([np.prod(p.shape) for p in module.parameters()])
 
 
 def target_update(net_main, net_target, polyak=0.9):
@@ -65,7 +69,7 @@ def my_vpg(
     act_dim = env.action_space.shape
     ac = actor_critic(env.observation_space, env.action_space, **ac_kwargs)
 
-    var_counts = tuple(core.count_vars(module) for module in [ac.pi, ac.v])
+    var_counts = tuple(count_vars(module) for module in [ac.pi, ac.v])
     logger.log(f"\nNumber of parameters \t pi: {var_counts[0]} v: {var_counts[1]}\n")
 
     # training_records = []
@@ -236,7 +240,7 @@ def my_vpg(
 
 def my_ppo(
     env_fn,
-    actor_critic,
+    actor_critic=GaussianActorCritic,
     seed=0,
     epochs=50,
     steps_per_epoch=4000,
@@ -270,7 +274,7 @@ def my_ppo(
     act_dim = env.action_space.shape
     ac = actor_critic(env.observation_space, env.action_space, **ac_kwargs)
 
-    var_counts = tuple(core.count_vars(module) for module in [ac.pi, ac.v])
+    var_counts = tuple(count_vars(module) for module in [ac.pi, ac.v])
     logger.log(f"\nNumber of parameters \t pi: {var_counts[0]} v: {var_counts[1]}\n")
 
     buf = TrajectoryBuffer(obs_dim, act_dim, steps_per_epoch, gamma, lam)
@@ -481,7 +485,7 @@ def my_ddgp(
     for p in agent_target.parameters():
         p.requires_grad = False
 
-    var_counts = tuple(core.count_vars(module) for module in [agent.policy, agent.q])
+    var_counts = tuple(count_vars(module) for module in [agent.policy, agent.q])
     logger.log(
         f"\nNumber of parameters \t policy: {var_counts[0]} q: {var_counts[1]}\n"
     )

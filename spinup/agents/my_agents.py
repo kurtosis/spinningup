@@ -23,19 +23,20 @@ class GaussianActor(nn.Module):
     Input dimension: 3 (observation)
     """
 
-    def __init__(self, layer_sizes_mu, layer_sizes_sigma, activation):
+    def __init__(self, layer_sizes_mu, act_dim, activation):
         super().__init__()
         self.mu_net = mlp(layer_sizes_mu, activation, nn.Identity)
         # self.sigma_net = mlp(layer_sizes_sigma, activation, nn.Softplus)
-        self.log_sigma_net = mlp(layer_sizes_sigma, activation, nn.Identity)
+        # self.log_sigma_net = mlp(layer_sizes_sigma, activation, nn.Identity)
         # adjust this to use action size
-        # self.log_sigma = torch.nn.Parameter(torch.Tensor([-0.5]))
+        log_sigma = -0.5 * np.ones(act_dim, dtype=np.float32)
+        self.log_sigma = torch.nn.Parameter(torch.as_tensor(log_sigma))
 
     def _distribution(self, obs):
         mu = self.mu_net(obs)
         # sigma = self.sigma_net(obs)
-        sigma = torch.exp(self.log_sigma_net(obs))
-        # sigma = torch.exp(self.log_sigma)
+        # sigma = torch.exp(self.log_sigma_net(obs))
+        sigma = torch.exp(self.log_sigma)
         return Normal(mu, sigma)
 
     def _logprob_from_distr(self, pi, act):
@@ -118,9 +119,9 @@ class GaussianActorCritic(nn.Module):
         self,
         observation_space,
         action_space,
-        hidden_layers_mu=[100],
-        hidden_layers_sigma=[100],
-        hidden_layers_v=[100],
+        hidden_layers_mu=[64, 64],
+        hidden_layers_sigma=[64, 64],
+        hidden_layers_v=[64, 64],
         activation=nn.Tanh,
         **kwargs
     ):
@@ -132,7 +133,8 @@ class GaussianActorCritic(nn.Module):
         layer_sizes_v = [obs_dim] + hidden_layers_v + [1]
         self.pi = GaussianActor(
             layer_sizes_mu=layer_sizes_mu,
-            layer_sizes_sigma=layer_sizes_sigma,
+            act_dim=act_dim,
+            # layer_sizes_sigma=layer_sizes_sigma,
             activation=activation,
         )
         self.v = ValueCritic(layer_sizes_v=layer_sizes_v, activation=activation)
@@ -169,7 +171,6 @@ class DDPGAgent(nn.Module):
         activation=nn.ReLU,
         final_activation=nn.Tanh,
         noise_std=0.1,
-        gamma=0.9,
         **kwargs
     ):
         super().__init__()
@@ -182,7 +183,6 @@ class DDPGAgent(nn.Module):
         layer_sizes_mu = [obs_dim] + hidden_layers_mu + [act_dim]
         layer_sizes_q = [obs_dim + act_dim] + hidden_layers_q + [1]
         self.noise_std = noise_std
-        self.gamma = gamma
         self.policy = BoundedContinuousActor(
             layer_sizes=layer_sizes_mu,
             activation=activation,
@@ -224,7 +224,6 @@ class TD3Agent(nn.Module):
         activation=nn.ReLU,
         final_activation=nn.Tanh,
         noise_std=0.1,
-        gamma=0.9,
         **kwargs
     ):
         super().__init__()
@@ -237,7 +236,6 @@ class TD3Agent(nn.Module):
         layer_sizes_mu = [obs_dim] + hidden_layers_mu + [act_dim]
         layer_sizes_q = [obs_dim + act_dim] + hidden_layers_q + [1]
         self.noise_std = noise_std
-        self.gamma = gamma
         self.policy = BoundedContinuousActor(
             layer_sizes=layer_sizes_mu,
             activation=activation,
