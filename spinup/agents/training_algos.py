@@ -543,9 +543,7 @@ def my_ddgp(
 
         with torch.no_grad():
             agent_target.q = target_update(agent.q, agent_target.q, polyak=polyak)
-            agent_target.pi = target_update(
-                agent.pi, agent_target.pi, polyak=polyak
-            )
+            agent_target.pi = target_update(agent.pi, agent_target.pi, polyak=polyak)
 
         logger.store(LossPi=pi_loss.item(), LossQ=q_loss.item(), **q_loss_info)
 
@@ -566,13 +564,14 @@ def my_ddgp(
     start_time = time.time()
 
     # Begin training phase.
+    t_total = 0
     for epoch in range(epochs):
         obs = env.reset()
         episode_return = 0
         episode_length = 0
         for t in range(steps_per_epoch):
             # Take random actions for first n steps to do broad exploration
-            if t + epoch * steps_per_epoch < start_steps:
+            if t_total < start_steps:
                 act = env.action_space.sample()
             else:
                 act = agent.act(torch.as_tensor(obs, dtype=torch.float32), noise=True)
@@ -600,12 +599,14 @@ def my_ddgp(
                 episode_return = 0
                 episode_length = 0
 
-            if t >= update_after and (t + 1) % update_every == 0:
+            if t_total >= update_after and (t + 1) % update_every == 0:
                 # update_start = time.time()
                 for _ in range(update_every):
                     update()
                 # update_end = time.time()
                 # print(f'update time {update_end - update_start}')
+
+            t_total += 1
 
         deterministic_policy_test()
         # Save model
@@ -624,7 +625,6 @@ def my_ddgp(
         logger.log_tabular("LossQ", average_only=True)
         logger.log_tabular("Time", time.time() - start_time)
         logger.dump_tabular()
-
 
 
 def my_td3(
@@ -783,13 +783,14 @@ def my_td3(
     start_time = time.time()
 
     # Begin training phase.
+    t_total = 0
     for epoch in range(epochs):
         obs = env.reset()
         episode_return = 0
         episode_length = 0
         for t in range(steps_per_epoch):
             # Take random actions for first n steps to do broad exploration
-            if t + epoch * steps_per_epoch < start_steps:
+            if t_total < start_steps:
                 act = env.action_space.sample()
             else:
                 act = agent.act(torch.as_tensor(obs, dtype=torch.float32), noise=True)
@@ -817,12 +818,14 @@ def my_td3(
                 episode_return = 0
                 episode_length = 0
 
-            if t >= update_after and (t + 1) % update_every == 0:
+            if t_total >= update_after and (t + 1) % update_every == 0:
                 # update_start = time.time()
                 for i_update in range(update_every):
                     update(i_update)
                 # update_end = time.time()
                 # print(f'update time {update_end - update_start}')
+
+            t_total += 1
 
         deterministic_policy_test()
         # Save model
@@ -995,13 +998,14 @@ def my_sac(
     start_time = time.time()
 
     # Begin training phase.
+    t_total = 0
     for epoch in range(epochs):
         obs = env.reset()
         episode_return = 0
         episode_length = 0
         for t in range(steps_per_epoch):
             # Take random actions for first n steps to do broad exploration
-            if t + epoch * steps_per_epoch < start_steps:
+            if t_total < start_steps:
                 act = env.action_space.sample()
             else:
                 act = agent.act(torch.as_tensor(obs, dtype=torch.float32))
@@ -1028,12 +1032,14 @@ def my_sac(
                 episode_return = 0
                 episode_length = 0
 
-            if t >= update_after and (t + 1) % update_every == 0:
+            if t_total >= update_after and (t + 1) % update_every == 0:
                 # update_start = time.time()
                 for _ in range(update_every):
                     update()
                 # update_end = time.time()
                 # print(f'update time {update_end - update_start}')
+
+            t_total += 1
 
         deterministic_policy_test()
         # Save model
@@ -1055,6 +1061,7 @@ def my_sac(
         logger.log_tabular("LossQ2", average_only=True)
         logger.log_tabular("Time", time.time() - start_time)
         logger.dump_tabular()
+
 
 if __name__ == "__main__":
     my_vpg(

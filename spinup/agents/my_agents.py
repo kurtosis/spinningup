@@ -232,10 +232,10 @@ class DDPGAgent(nn.Module):
         """Return noisy action as numpy array, **without computing grads**"""
         # TO DO: fix how noise and clipping are handled for multiple dimensions.
         with torch.no_grad():
-            act = self.pi(obs)
+            act = self.pi(obs).numpy()
             if noise:
                 act += self.noise_std * np.random.randn(self.act_dim)
-            act = np.clip(act.numpy(), self.act_low[0], self.act_high[0])
+            act = np.clip(act, self.act_low[0], self.act_high[0])
         return act
 
 
@@ -288,10 +288,10 @@ class TD3Agent(nn.Module):
         """Return noisy action as numpy array, **without computing grads**"""
         # TO DO: fix how noise and clipping are handled for multiple dimensions.
         with torch.no_grad():
-            act = self.pi(obs)
+            act = self.pi(obs).numpy()
             if noise:
                 act += self.noise_std * np.random.randn(self.act_dim)
-            act = np.clip(act.numpy(), self.act_low[0], self.act_high[0])
+            act = np.clip(act, self.act_low[0], self.act_high[0])
         return act
 
 
