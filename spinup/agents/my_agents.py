@@ -17,13 +17,15 @@ def mlp(layer_sizes, hidden_activation, final_activation):
     return nn.Sequential(*layers)
 
 
-class GaussianActor(nn.Module):
+class NormalDistActor(nn.Module):
     """
-    Produces a Normal distribution for one var from a MLP for mu and sigma.
-    Input dimension: 3 (observation)
+    A stochastic policy for use in on-policy methods
+    forward method: returns Normal dist and logprob of an action if passed
+    model: N(mu, sigma) with MLP for mu, log(sigma) is a tunable parameter
+    Input: observation/state
     """
 
-    def __init__(self, layer_sizes_mu, act_dim, activation):
+    def __init__(self, layer_sizes_mu, act_dim, act_low, act_high, activation):
         super().__init__()
         self.mu_net = mlp(layer_sizes_mu, activation, nn.Identity)
         # self.sigma_net = mlp(layer_sizes_sigma, activation, nn.Softplus)
@@ -32,7 +34,7 @@ class GaussianActor(nn.Module):
         log_sigma = -0.5 * np.ones(act_dim, dtype=np.float32)
         self.log_sigma = torch.nn.Parameter(torch.as_tensor(log_sigma))
 
-    def _distribution(self, obs):
+    def distribution(self, obs):
         mu = self.mu_net(obs)
         # sigma = self.sigma_net(obs)
         # sigma = torch.exp(self.log_sigma_net(obs))
@@ -49,22 +51,6 @@ class GaussianActor(nn.Module):
         if act is not None:
             logprob = self._logprob_from_distr(pi, act)
         return pi, logprob
-
-
-class ValueCritic(nn.Module):
-    """
-    Produces a value estimate from a MLP.
-    Input dimension: 3 (observation)
-    Output dimension: 1
-    """
-
-    def __init__(self, layer_sizes_v, activation):
-        super().__init__()
-        self.v_net = mlp(layer_sizes_v, activation, nn.Identity)
-
-    def forward(self, x):
-        v = self.v_net(x)
-        return torch.squeeze(v, -1)  # Critical to ensure v has right shape.
 
 
 class ContinuousEstimator(nn.Module):
@@ -84,12 +70,12 @@ class ContinuousEstimator(nn.Module):
         self.net = mlp(layer_sizes, activation, final_activation)
 
     def forward(self, x):
-        # x should contain [obs, act]
+        # x should contain [obs, act] for off-policy methods
         output = self.net(x)
         return torch.squeeze(output, -1)  # Critical to ensure v has right shape.
 
 
-class BoundedContinuousActor(nn.Module):
+class BoundedDeterministicActor(nn.Module):
     """
     MLP net for actor in bounded continuous action space.
     Returns deterministic action.
@@ -107,6 +93,52 @@ class BoundedContinuousActor(nn.Module):
     def forward(self, x):
         output = (self.net(x) + 1) * self.width / 2 + self.low
         return output
+
+
+class BoundedStochasticActor(nn.Module):
+    """
+    Produces a squashed Normal distribution for one var from a MLP for mu and sigma.
+    """
+
+    def __init__(
+        self,
+        layer_sizes,
+        act_dim,
+        act_low,
+        act_high,
+        activation=nn.ReLU,
+        log_sigma_min=-20,
+        log_sigma_max=2,
+    ):
+        super().__init__()
+        self.act_low = torch.as_tensor(act_low)
+        self.act_width = torch.as_tensor(act_high - act_low)
+        self.shared_net = mlp(layer_sizes, activation, activation)
+        self.mu_layer = nn.Linear(layer_sizes[-1], act_dim, activation)
+        self.log_sigma_layer = nn.Linear(layer_sizes[-1], act_dim, activation)
+        self.log_sigma_min = log_sigma_min
+        self.log_sigma_max = log_sigma_max
+
+    def forward(self, obs, deterministic=False, get_logprob=False):
+        shared = self.shared_net(obs)
+        mu = self.mu_layer(shared)
+        log_sigma = self.log_sigma_layer(shared)
+        log_sigma = torch.clamp(log_sigma, self.log_sigma_min, self.log_sigma_max)
+        sigma = torch.exp(log_sigma)
+        pi = Normal(mu, sigma)
+        if deterministic:
+            # For evaluating performance at end of epoch, not for data collection
+            act = mu
+        else:
+            act = pi.rsample()
+        logprob = None
+        if get_logprob:
+            logprob = pi.log_prob(act).sum(axis=-1)
+            # Convert pdf due to tanh transform
+            logprob -= (2 * (np.log(2) - act - F.softplus(-2 * act))).sum(axis=1)
+        act = torch.tanh(act)
+        act = (act + 1) * self.act_width / 2 + self.act_low
+        return act, logprob
 
 
 class GaussianActorCritic(nn.Module):
@@ -129,23 +161,25 @@ class GaussianActorCritic(nn.Module):
         obs_dim = observation_space.shape[0]
         act_dim = action_space.shape[0]
         layer_sizes_mu = [obs_dim] + hidden_layers_mu + [act_dim]
-        layer_sizes_sigma = [obs_dim] + hidden_layers_sigma + [act_dim]
+        # layer_sizes_sigma = [obs_dim] + hidden_layers_sigma + [act_dim]
         layer_sizes_v = [obs_dim] + hidden_layers_v + [1]
-        self.pi = GaussianActor(
+        self.pi = NormalDistActor(
             layer_sizes_mu=layer_sizes_mu,
             act_dim=act_dim,
             # layer_sizes_sigma=layer_sizes_sigma,
             activation=activation,
         )
-        self.v = ValueCritic(layer_sizes_v=layer_sizes_v, activation=activation)
+        self.v = ContinuousEstimator(layer_sizes_v=layer_sizes_v, activation=activation)
+        self.act_low = action_space.low
+        self.act_high = action_space.high
 
     def step(self, obs):
         with torch.no_grad():
-            pi = self.pi._distribution(obs)
+            pi = self.pi.distribution(obs)
             act = pi.sample()
             logprob = pi.log_prob(act)
             logprob = logprob.sum(axis=-1)
-            act = act.clamp(-2, 2)
+            act = act.clamp(self.act_low, self.act_high)
             val = self.v(obs)
         return act.numpy(), val.numpy(), logprob.numpy()
 
@@ -175,15 +209,14 @@ class DDPGAgent(nn.Module):
     ):
         super().__init__()
         obs_dim = observation_space.shape[0]
-        act_dim = action_space.shape[0]
         self.act_dim = action_space.shape[0]
         self.act_low = action_space.low
         self.act_high = action_space.high
 
-        layer_sizes_mu = [obs_dim] + hidden_layers_mu + [act_dim]
-        layer_sizes_q = [obs_dim + act_dim] + hidden_layers_q + [1]
+        layer_sizes_mu = [obs_dim] + hidden_layers_mu + [self.act_dim]
+        layer_sizes_q = [obs_dim + self.act_dim] + hidden_layers_q + [1]
         self.noise_std = noise_std
-        self.policy = BoundedContinuousActor(
+        self.pi = BoundedDeterministicActor(
             layer_sizes=layer_sizes_mu,
             activation=activation,
             final_activation=final_activation,
@@ -199,7 +232,7 @@ class DDPGAgent(nn.Module):
         """Return noisy action as numpy array, **without computing grads**"""
         # TO DO: fix how noise and clipping are handled for multiple dimensions.
         with torch.no_grad():
-            act = self.policy(obs)
+            act = self.pi(obs)
             if noise:
                 act += self.noise_std * np.random.randn(self.act_dim)
             act = np.clip(act.numpy(), self.act_low[0], self.act_high[0])
@@ -236,7 +269,7 @@ class TD3Agent(nn.Module):
         layer_sizes_mu = [obs_dim] + hidden_layers_mu + [act_dim]
         layer_sizes_q = [obs_dim + act_dim] + hidden_layers_q + [1]
         self.noise_std = noise_std
-        self.policy = BoundedContinuousActor(
+        self.pi = BoundedDeterministicActor(
             layer_sizes=layer_sizes_mu,
             activation=activation,
             final_activation=final_activation,
@@ -255,57 +288,11 @@ class TD3Agent(nn.Module):
         """Return noisy action as numpy array, **without computing grads**"""
         # TO DO: fix how noise and clipping are handled for multiple dimensions.
         with torch.no_grad():
-            act = self.policy(obs)
+            act = self.pi(obs)
             if noise:
                 act += self.noise_std * np.random.randn(self.act_dim)
             act = np.clip(act.numpy(), self.act_low[0], self.act_high[0])
         return act
-
-
-class TanhStochasticActor(nn.Module):
-    """
-    Produces a squashed Normal distribution for one var from a MLP for mu and sigma.
-    """
-
-    def __init__(
-        self,
-        layer_sizes,
-        act_dim,
-        low,
-        high,
-        activation=nn.ReLU,
-        log_sigma_min=-20,
-        log_sigma_max=2,
-    ):
-        super().__init__()
-        self.low = torch.as_tensor(low)
-        self.width = torch.as_tensor(high - low)
-        self.shared_net = mlp(layer_sizes, activation, activation)
-        self.mu_layer = nn.Linear(layer_sizes[-1], act_dim, activation)
-        self.log_sigma_layer = nn.Linear(layer_sizes[-1], act_dim, activation)
-        self.log_sigma_min = log_sigma_min
-        self.log_sigma_max = log_sigma_max
-
-    def forward(self, obs, deterministic=False, get_logprob=False):
-        shared = self.shared_net(obs)
-        mu = self.mu_layer(shared)
-        log_sigma = self.log_sigma_layer(shared)
-        log_sigma = torch.clamp(log_sigma, self.log_sigma_min, self.log_sigma_max)
-        sigma = torch.exp(log_sigma)
-        pi = Normal(mu, sigma)
-        if deterministic:
-            # For evaluating performance at end of epoch, not for data collection
-            act = mu
-        else:
-            act = pi.rsample()
-        logprob = None
-        if get_logprob:
-            logprob = pi.log_prob(act).sum(axis=-1)
-            # Convert pdf due to tanh transform
-            logprob -= (2 * (np.log(2) - act - F.softplus(-2 * act))).sum(axis=1)
-        act = torch.tanh(act)
-        act = (act + 1) * self.width / 2 + self.low
-        return act, logprob
 
 
 class SACAgent(nn.Module):
@@ -330,7 +317,7 @@ class SACAgent(nn.Module):
         act_dim = action_space.shape[0]
         layer_sizes_pi = [obs_dim] + hidden_layers_pi
         layer_sizes_q = [obs_dim + act_dim] + hidden_layers_q + [1]
-        self.policy = TanhStochasticActor(
+        self.pi = BoundedStochasticActor(
             layer_sizes_pi,
             act_dim,
             action_space.low,
@@ -348,7 +335,7 @@ class SACAgent(nn.Module):
     def act(self, obs, deterministic=False):
         """Return noisy action as numpy array, **without computing grads**"""
         with torch.no_grad():
-            act, _ = self.policy(obs, deterministic=deterministic)
+            act, _ = self.pi(obs, deterministic=deterministic)
         return act.numpy()
 
 
@@ -369,7 +356,7 @@ def merge_shape(shape1, shape2=None):
         return (shape1, *shape2)
 
 
-# For VPG/PPO
+# For on-policy VPG/PPO
 class TrajectoryBuffer:
     def __init__(self, obs_dim, act_dim, size, gamma=0.99, lamb=0.95):
         self.obs = np.zeros(merge_shape(size, obs_dim), dtype=np.float32)
@@ -446,6 +433,7 @@ class TrajectoryBuffer:
         return data
 
 
+# For off-policy methods
 class TransitionBuffer:
     def __init__(self, obs_dim, act_dim, size):
         self.obs = np.zeros(merge_shape(size, obs_dim), dtype=np.float32)

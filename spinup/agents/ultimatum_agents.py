@@ -120,7 +120,7 @@ class DualUltimatumSACAgent(nn.Module):
         act_dim = action_space.shape[0]
         layer_sizes_pi = [obs_dim] + hidden_layers_pi
         layer_sizes_q = [obs_dim + act_dim] + hidden_layers_q + [1]
-        self.pi = TanhStochasticActor(
+        self.pi = BoundedStochasticActor(
             layer_sizes_pi,
             act_dim,
             action_space.low,

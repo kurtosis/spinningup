@@ -11,8 +11,8 @@ from spinup import vpg_pytorch, ppo_pytorch, ddpg_pytorch, td3_pytorch, sac_pyto
 
 # from spinup.agents.my_agents import *
 from spinup.agents.training_algos import *
-from spinup.agents.my_td3 import *
-from spinup.agents.my_sac import *
+# from spinup.agents.my_td3 import *
+# from spinup.agents.my_sac import *
 
 from spinup.user_config import (
     DEFAULT_DATA_DIR,
@@ -60,7 +60,7 @@ def create_output_msg(logger_kwargs):
 
 env_str = "Hopper-v3"
 env_list = ["Walker2d-v3", "Ant-v3", "Hopper-v3", "HalfCheetah-v3", "Swimmer-v3"]
-# env_list = ["Hopper-v3",]
+# env_list = ["Walker2d-v3"]
 
 
 def logging_info(env_str, subdir=None):
@@ -110,6 +110,38 @@ runs_per_method_ppo = 4
 #         )
 #         print(f"spinningup ppo {env_str}")
 #         # print(output_msg)
+
+
+# # non-PPO methods- smaller nets
+# for env_str in env_list:
+#     for i in range(runs_per_method):
+#         seed += 1
+#         print(f"ddpg {env_str}")
+#         logger_kwargs, output_msg = logging_info(env_str, subdir="ddpg_64")
+#         my_ddgp(
+#             lambda: gym.make(env_str),
+#             seed=seed,
+#             epochs=epochs,
+#             steps_per_epoch=steps_per_epoch,
+#             logger_kwargs=logger_kwargs,
+#             agent_kwargs=dict(hidden_layers_mu=[64, 64], hidden_layers_q=[64, 64])
+#         )
+#         print(f"ddpg {env_str}")
+#
+# for env_str in env_list:
+#     for i in range(runs_per_method):
+#         seed += 1
+#         print(f"spinningup ddpg {env_str}")
+#         logger_kwargs, output_msg = logging_info(env_str, subdir="su_ddpg_64")
+#         ddpg_pytorch(
+#             lambda: gym.make(env_str),
+#             seed=seed,
+#             epochs=epochs,
+#             steps_per_epoch=steps_per_epoch,
+#             logger_kwargs=logger_kwargs,
+#             ac_kwargs=dict(hidden_sizes=(64, 64)),
+#         )
+#         print(f"spinningup ddpg {env_str}")
 
 # non-PPO methods
 for env_str in env_list:
