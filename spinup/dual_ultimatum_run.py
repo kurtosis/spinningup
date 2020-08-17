@@ -26,11 +26,11 @@ def create_output_msg(logger_kwargs):
     test_cmd = "python -m spinup.run test_policy " + logger_kwargs["output_dir"]
     test_cmd = colorize(test_cmd, "green")
     output_msg = (
-            "\n" * 5
-            + "=" * DIV_LINE_WIDTH
-            + "\n"
-            + dedent(
-        """\
+        "\n" * 5
+        + "=" * DIV_LINE_WIDTH
+        + "\n"
+        + dedent(
+            """\
 End of experiment.
 
 
@@ -45,10 +45,10 @@ Watch the trained agent with:
 
 
 """
-        % (plot_cmd, test_cmd)
-    )
-            + "=" * DIV_LINE_WIDTH
-            + "\n" * 5
+            % (plot_cmd, test_cmd)
+        )
+        + "=" * DIV_LINE_WIDTH
+        + "\n" * 5
     )
     return output_msg
 
@@ -69,8 +69,41 @@ epochs = 10
 steps_per_epoch = 4000
 runs_per_method = 4
 runs_per_method_ppo = 4
+max_episode_len = 100
 
-logger_kwargs, output_msg = logging_info('dual_ultimatum', subdir="dual_ultimatum")
+logger_kwargs, output_msg = logging_info("dual_ultimatum", subdir="dual_ultimatum")
+
+# const_offer = 0.5
+# const_threshold = 0.5
+# dualultimatum_ddpg(
+#     agent_fn=DDPGAgent,
+#     player_2=ConstantBot(offer=const_offer, threshold=const_threshold),
+#     env_fn=DualUltimatum,
+#     epochs=epochs,
+#     steps_per_epoch=steps_per_epoch,
+#     max_episode_len=max_episode_len,
+#     test_episodes=200,
+# )
+
+mean_offer = 0.5
+std_offer = 100.0
+mean_threshold = 0.5
+std_threshold = 100.0
+dualultimatum_ddpg(
+    agent_fn=DDPGAgent,
+    player_2=StaticDistribBot(
+        mean_offer=mean_offer,
+        mean_threshold=mean_threshold,
+        std_offer=std_offer,
+        std_threshold=std_threshold,
+    ),
+    env_fn=DualUltimatum,
+    epochs=epochs,
+    steps_per_epoch=steps_per_epoch,
+    max_episode_len=max_episode_len,
+    test_episodes=200,
+)
+
 # dualultimatum_bots(
 #     ConstantBot(offer=0.5, threshold=0.5),
 #     ConstantBot(offer=0.5, threshold=0.5),
@@ -107,11 +140,11 @@ logger_kwargs, output_msg = logging_info('dual_ultimatum', subdir="dual_ultimatu
 #     logger_kwargs=logger_kwargs,
 # )
 
-dualultimatum_bots(
-    ConstantBot(offer=0.5, threshold=0.5),
-    StaticDistribBot(),
-    seed=seed,
-    epochs=epochs,
-    steps_per_epoch=steps_per_epoch,
-    logger_kwargs=logger_kwargs,
-)
+# dualultimatum_bots(
+#     ConstantBot(offer=0.5, threshold=0.5),
+#     StaticDistribBot(),
+#     seed=seed,
+#     epochs=epochs,
+#     steps_per_epoch=steps_per_epoch,
+#     logger_kwargs=logger_kwargs,
+# )

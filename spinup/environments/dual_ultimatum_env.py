@@ -14,7 +14,7 @@ class DualUltimatum(gym.Env):
 
         # self.observation_space = spaces.Discrete(2)
         self.observation_space = spaces.Box(
-            low=0.0, high=1.0, shape=(2, 2), dtype=np.float32
+            low=0.0, high=1.0, shape=(4,), dtype=np.float32
         )
 
     def step(self, actions):
@@ -31,4 +31,5 @@ class DualUltimatum(gym.Env):
 
     def reset(self):
         # Nothing do reset for this environment
+        return np.array([0.5, 0.5, 0.5, 0.5])
         pass

@@ -24,16 +24,16 @@ def count_vars(module):
     return sum([np.prod(p.shape) for p in module.parameters()])
 
 
-def target_update(net_main, net_target, polyak=0.9):
-    """Update a lagged target network by Polya averaging."""
-    new_state_dict = net_target.state_dict()
-    for key in new_state_dict:
-        new_state_dict[key] = (
-            polyak * net_target.state_dict()[key]
-            + (1 - polyak) * net_main.state_dict()[key]
-        )
-    net_target.load_state_dict(new_state_dict)
-    return net_target
+# def target_update(net_main, net_target, polyak=0.9):
+#     """Update a lagged target network by Polya averaging."""
+#     new_state_dict = net_target.state_dict()
+#     for key in new_state_dict:
+#         new_state_dict[key] = (
+#             polyak * net_target.state_dict()[key]
+#             + (1 - polyak) * net_main.state_dict()[key]
+#         )
+#     net_target.load_state_dict(new_state_dict)
+#     return net_target
 
 
 def my_vpg(
@@ -518,16 +518,26 @@ def my_ddgp(
         q_loss_info = {"QVals": q.detach().numpy()}
         return ((q - q_target) ** 2).mean(), q_loss_info
 
+
+    # q_time = 0.0
+    # pi_time = 0.0
+    # target_time = 0.0
+    # batch_time = 0.0
+
+    # def update(q_time, pi_time, target_time):
     def update():
         # Get training data from buffer
         data = buf.get(sample_size=sample_size)
 
         # Update Q function
+        # t0 = time.time()
         q_optimizer.zero_grad()
         q_target = compute_q_target(data)
         q_loss, q_loss_info = compute_loss_q(data, q_target)
         q_loss.backward()
         q_optimizer.step()
+        # t1 = time.time()
+        # q_time += (t1-t0)
 
         # Freeze Q params during policy update to save time
         for p in agent.q.parameters():
@@ -540,12 +550,19 @@ def my_ddgp(
         # Unfreeze Q params after policy update
         for p in agent.q.parameters():
             p.requires_grad = True
+        # t2 = time.time()
+        # pi_time += (t2-t1)
 
         with torch.no_grad():
-            agent_target.q = target_update(agent.q, agent_target.q, polyak=polyak)
-            agent_target.pi = target_update(agent.pi, agent_target.pi, polyak=polyak)
+            # Use in place method from Spinning Up, faster than creating a new state_dict
+            for p, p_target in zip(agent.parameters(), agent_target.parameters()):
+                p_target.data.mul_(polyak)
+                p_target.data.add_((1-polyak) * p.data)
+        # t3 = time.time()
+        # target_time += (t3-t2)
 
         logger.store(LossPi=pi_loss.item(), LossQ=q_loss.item(), **q_loss_info)
+        # return q_time, pi_time, target_time
 
     def deterministic_policy_test():
         for _ in range(test_episodes):
@@ -565,7 +582,7 @@ def my_ddgp(
 
     # Begin training phase.
     t_total = 0
-    # n_updates = 0
+    update_time = 0.
     for epoch in range(epochs):
         obs = env.reset()
         episode_return = 0
@@ -604,8 +621,10 @@ def my_ddgp(
                 # update_start = time.time()
                 for _ in range(update_every):
                     update()
+                    # q_time, pi_time, target_time = update(q_time, pi_time, target_time)
                     # n_updates += 1
-                update_end = time.time()
+                # update_end = time.time()
+                # update_time += (update_end - update_start)
                 # print(f'update time {update_end - update_start}')
 
             t_total += 1
@@ -627,8 +646,10 @@ def my_ddgp(
         logger.log_tabular("LossQ", average_only=True)
         logger.log_tabular("Time", time.time() - start_time)
         logger.dump_tabular()
-        # print(f't_total {t_total}')
-        # print(f'n_updates {n_updates}')
+        # print(f'update_time {update_time}')
+        # print(f'q_time {q_time}')
+        # print(f'pi_time {pi_time}')
+        # print(f'target_time {target_time}')
 
 
 def my_td3(
@@ -759,15 +780,11 @@ def my_td3(
                 p.requires_grad = True
 
             with torch.no_grad():
-                agent_target.q1 = target_update(
-                    agent.q1, agent_target.q1, polyak=polyak
-                )
-                agent_target.q2 = target_update(
-                    agent.q2, agent_target.q2, polyak=polyak
-                )
-                agent_target.pi = target_update(
-                    agent.pi, agent_target.pi, polyak=polyak
-                )
+                # Use in place method from Spinning Up, faster than creating a new state_dict
+                for p, p_target in zip(agent.parameters(), agent_target.parameters()):
+                    p_target.data.mul_(polyak)
+                    p_target.data.add_((1 - polyak) * p.data)
+
             logger.store(LossPi=pi_loss.item(),)
 
     def deterministic_policy_test():
@@ -985,8 +1002,10 @@ def my_sac(
         logger.store(LossPi=pi_loss.item(), **policy_info)
 
         with torch.no_grad():
-            agent_target.q1 = target_update(agent.q1, agent_target.q1, polyak=polyak)
-            agent_target.q2 = target_update(agent.q2, agent_target.q2, polyak=polyak)
+            # Use in place method from Spinning Up, faster than creating a new state_dict
+            for p, p_target in zip(agent.parameters(), agent_target.parameters()):
+                p_target.data.mul_(polyak)
+                p_target.data.add_((1-polyak) * p.data)
 
     def deterministic_policy_test():
         for _ in range(test_episodes):
