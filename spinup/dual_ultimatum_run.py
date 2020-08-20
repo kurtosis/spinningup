@@ -85,18 +85,38 @@ logger_kwargs, output_msg = logging_info("dual_ultimatum", subdir="dual_ultimatu
 #     test_episodes=200,
 # )
 
-mean_offer = 0.5
-std_offer = 100.0
-mean_threshold = 0.5
-std_threshold = 100.0
+
+static_agent_kwargs = dict(
+    mean_offer=0.2, std_offer=0.00001, mean_threshold=0.55, std_threshold=0.00001
+)
+
+# dualultimatum_ddpg(
+#     agent_1_fn=DDPGAgent,
+#     agent_2_fn=StaticDistribBot,
+#     agent_2_kwargs=static_agent_kwargs,
+#     env_fn=DualUltimatum,
+#     epochs=epochs,
+#     steps_per_epoch=steps_per_epoch,
+#     max_episode_len=max_episode_len,
+#     test_episodes=200,
+# )
+#
+# dualultimatum_ddpg(
+#     agent_2_fn=DDPGAgent,
+#     agent_1_fn=StaticDistribBot,
+#     agent_1_kwargs=static_agent_kwargs,
+#     env_fn=DualUltimatum,
+#     epochs=epochs,
+#     steps_per_epoch=steps_per_epoch,
+#     max_episode_len=max_episode_len,
+#     test_episodes=200,
+# )
+
 dualultimatum_ddpg(
-    agent_fn=DDPGAgent,
-    player_2=StaticDistribBot(
-        mean_offer=mean_offer,
-        mean_threshold=mean_threshold,
-        std_offer=std_offer,
-        std_threshold=std_threshold,
-    ),
+    agent_1_fn=DDPGAgent,
+    agent_1_kwargs=static_agent_kwargs,
+    agent_2_fn=DDPGAgent,
+    agent_2_kwargs=static_agent_kwargs,
     env_fn=DualUltimatum,
     epochs=epochs,
     steps_per_epoch=steps_per_epoch,

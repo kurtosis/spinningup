@@ -1,9 +1,11 @@
+from copy import deepcopy
 import numpy as np
 
 import torch
 from torch.distributions import Normal
 import torch.nn.functional as F
 import torch.nn as nn
+from torch.optim import Adam
 
 
 def mlp(layer_sizes, hidden_activation, final_activation):
@@ -157,9 +159,7 @@ class GaussianActorCritic(nn.Module):
         layer_sizes_mu = [obs_dim] + list(hidden_layers_mu) + [act_dim]
         layer_sizes_v = [obs_dim] + list(hidden_layers_v) + [1]
         self.pi = NormalDistActor(
-            layer_sizes_mu=layer_sizes_mu,
-            act_dim=act_dim,
-            activation=activation,
+            layer_sizes_mu=layer_sizes_mu, act_dim=act_dim, activation=activation,
         )
         self.v = ContinuousEstimator(layer_sizes_v=layer_sizes_v, activation=activation)
         self.act_low = action_space.low
@@ -192,11 +192,15 @@ class DDPGAgent(nn.Module):
         self,
         observation_space,
         action_space,
-        hidden_layers_mu=(256, 256),
-        hidden_layers_q=(256, 256),
+        hidden_layers_mu=(16, 16),
+        hidden_layers_q=(16, 16),
         activation=nn.ReLU,
         final_activation=nn.Tanh,
         noise_std=0.1,
+        pi_lr=1e-3,
+        q_lr=1e-3,
+        polyak=0.995,
+        gamma=0.99,
         **kwargs
     ):
         super().__init__()
@@ -207,7 +211,11 @@ class DDPGAgent(nn.Module):
 
         layer_sizes_mu = [obs_dim] + list(hidden_layers_mu) + [self.act_dim]
         layer_sizes_q = [obs_dim + self.act_dim] + list(hidden_layers_q) + [1]
+
         self.noise_std = noise_std
+        self.polyak = polyak
+        self.gamma = gamma
+
         self.pi = BoundedDeterministicActor(
             layer_sizes=layer_sizes_mu,
             activation=activation,
@@ -219,6 +227,12 @@ class DDPGAgent(nn.Module):
         self.q = ContinuousEstimator(
             layer_sizes=layer_sizes_q, activation=activation, **kwargs
         )
+        self.pi_optimizer = Adam(self.pi.parameters(), lr=pi_lr)
+        self.q_optimizer = Adam(self.q.parameters(), lr=q_lr)
+
+        self.target = deepcopy(self)
+        for p in self.target.parameters():
+            p.requires_grad = False
 
     def act(self, obs, noise=False):
         """Return noisy action as numpy array, **without computing grads**"""
@@ -229,6 +243,56 @@ class DDPGAgent(nn.Module):
                 act += self.noise_std * np.random.randn(self.act_dim)
             act = np.clip(act, self.act_low[0], self.act_high[0])
         return act
+
+    def update_pi(self, data=None):
+        # Freeze Q params during policy update to save time
+        for p in self.q.parameters():
+            p.requires_grad = False
+        self.pi_optimizer.zero_grad()
+        o = data["obs"]
+        a = self.pi(o)
+        pi_loss = -self.q(torch.cat((o, a), dim=-1)).mean()
+        pi_loss.backward()
+        self.pi_optimizer.step()
+        # Unfreeze Q params after policy update
+        for p in self.q.parameters():
+            p.requires_grad = True
+        return pi_loss
+
+    def update_q(self, data=None, agent=None):
+        r, o_next, d = data["reward"], data["obs_next"], data["done"]
+        if agent is not None:
+            r = r[:, agent]
+        self.q_optimizer.zero_grad()
+        with torch.no_grad():
+            a_next = self.target.pi(o_next)
+            q_target = self.target.q(torch.cat((o_next, a_next), dim=-1))
+            q_target = r + self.gamma * (1 - d) * q_target
+        o, a = data["obs"], data["act"]
+        if agent is not None:
+            a = a[:, agent]
+        q = self.q(torch.cat((o, a), dim=-1))
+        q_loss_info = {"QVals": q.detach().numpy()}
+        q_loss = ((q - q_target) ** 2).mean()
+        q_loss.backward()
+        self.q_optimizer.step()
+        return q_loss, q_loss_info
+
+    def update_target(self):
+        with torch.no_grad():
+            # Use in place method from Spinning Up, faster than creating a new state_dict
+            for p, p_target in zip(self.pi.parameters(), self.target.pi.parameters()):
+                p_target.data.mul_(self.polyak)
+                p_target.data.add_((1 - self.polyak) * p.data)
+            for p, p_target in zip(self.q.parameters(), self.target.q.parameters()):
+                p_target.data.mul_(self.polyak)
+                p_target.data.add_((1 - self.polyak) * p.data)
+
+    def update(self, data, **kwargs):
+        pi_loss = self.update_pi(data=data)
+        q_loss, q_loss_info = self.update_q(data=data, **kwargs)
+        self.update_target()
+        return pi_loss, q_loss, q_loss_info
 
 
 class TD3Agent(nn.Module):
@@ -427,14 +491,14 @@ class TrajectoryBuffer:
 
 # For off-policy methods
 class TransitionBuffer:
-    def __init__(self, obs_dim, act_dim, size):
-        self.obs = np.zeros(merge_shape(size, obs_dim), dtype=np.float32)
-        self.act = np.zeros(merge_shape(size, act_dim), dtype=np.float32)
-        self.reward = np.zeros(size, dtype=np.float32)
-        self.obs_next = np.zeros(merge_shape(size, obs_dim), dtype=np.float32)
-        self.done = np.zeros(size, dtype=np.float32)
+    def __init__(self, obs_dim, act_dim, max_size):
+        self.obs = np.zeros(merge_shape(max_size, obs_dim), dtype=np.float32)
+        self.act = np.zeros(merge_shape(max_size, act_dim), dtype=np.float32)
+        self.reward = np.zeros(max_size, dtype=np.float32)
+        self.obs_next = np.zeros(merge_shape(max_size, obs_dim), dtype=np.float32)
+        self.done = np.zeros(max_size, dtype=np.float32)
         self.ptr = 0
-        self.max_size = size
+        self.max_size = max_size
         self.filled_size = 0
         self.full = False
 
@@ -459,10 +523,55 @@ class TransitionBuffer:
         Return needed variables (as tensors) over episodes in buffer.
         Reset pointers for next epoch.
         """
-        # can only get data when buffer is full
-        # if not self.full:
-        #     raise Exception('Buffer cannot be sampled until it is full.')
         # return needed variables as a dictionary
+        sample_indexes = np.random.randint(0, self.filled_size, sample_size)
+        data = {
+            "obs": torch.as_tensor(self.obs[sample_indexes], dtype=torch.float32),
+            "act": torch.as_tensor(self.act[sample_indexes], dtype=torch.float32),
+            "reward": torch.as_tensor(self.reward[sample_indexes], dtype=torch.float32),
+            "obs_next": torch.as_tensor(
+                self.obs_next[sample_indexes], dtype=torch.float32
+            ),
+            "done": torch.as_tensor(self.done[sample_indexes], dtype=torch.float32),
+        }
+        return data
+
+
+# For off-policy methods
+class MultiagentTransitionBuffer:
+    def __init__(self, obs_dim, act_dim, n_agents, max_size):
+        self.obs = np.zeros(merge_shape(max_size, obs_dim), dtype=np.float32)
+        self.act = np.zeros(merge_shape(max_size, act_dim + (n_agents,)), dtype=np.float32)
+        self.reward = np.zeros((max_size, n_agents), dtype=np.float32)
+        self.obs_next = np.zeros(merge_shape(max_size, obs_dim), dtype=np.float32)
+        self.done = np.zeros(max_size, dtype=np.float32)
+        self.ptr = 0
+        self.max_size = max_size
+        self.filled_size = 0
+        self.full = False
+
+    def store(self, obs, act, reward, obs_next, done):
+        """Add current step variables to buffer."""
+        # Cycle through buffer, overwriting oldest entry.
+        # Note that buffer is never flushed, unlike on-policy methods.
+        if self.ptr >= self.max_size:
+            self.ptr = self.ptr % self.max_size
+            self.full = True
+        self.obs[self.ptr] = obs
+        self.act[self.ptr] = act
+        self.reward[self.ptr] = reward
+        self.obs_next[self.ptr] = obs_next
+        self.done[self.ptr] = done
+        self.ptr += 1
+        if not self.full:
+            self.filled_size += 1
+
+    def get(self, sample_size=100):
+        """
+        Return needed variables (as tensors) over episodes in buffer.
+        Reset pointers for next epoch.
+        """
+       # return needed variables as a dictionary
         sample_indexes = np.random.randint(0, self.filled_size, sample_size)
         data = {
             "obs": torch.as_tensor(self.obs[sample_indexes], dtype=torch.float32),

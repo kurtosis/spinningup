@@ -41,6 +41,7 @@ class ConstantBot:
 
     def __init__(
         self,
+        *args,
         offer=None,
         threshold=None,
         mean_offer=None,
@@ -66,8 +67,11 @@ class ConstantBot:
         else:
             self.threshold = np.random.rand(1)[0]
 
-    def act(self):
+    def act(self, *args, **kwargs):
         return np.array((self.offer, self.threshold))
+
+    def update(self, *args, **kwargs):
+        pass
 
 
 class StaticDistribBot:
@@ -78,6 +82,7 @@ class StaticDistribBot:
 
     def __init__(
         self,
+        *args,
         mean_offer=0.5,
         std_offer=1.0,
         mean_threshold=0.5,
@@ -87,21 +92,26 @@ class StaticDistribBot:
         # Initialized with approximate mean values (in (0,1)) for simplicity.
         # Note these aren't exact means b/c of the nonlinear tanh transform.
         self.approx_mean_offer = mean_offer
-        self.mean_tanh_offer = np.arctanh(2*mean_offer - 1)
+        self.mean_tanh_offer = np.arctanh(2 * mean_offer - 1)
         self.std_offer = std_offer
         self.approx_mean_threshold = mean_threshold
-        self.mean_tanh_threshold = np.arctanh(2*mean_threshold - 1)
+        self.mean_tanh_threshold = np.arctanh(2 * mean_threshold - 1)
         self.std_threshold = std_threshold
 
-    def act(self):
+    def act(self, *args, **kwargs):
         offer = (
             1 + np.tanh(self.mean_tanh_offer + self.std_offer * np.random.randn(1)[0])
         ) / 2
         threshold = (
             1
-            + np.tanh(self.mean_tanh_threshold + self.std_threshold * np.random.randn(1)[0])
+            + np.tanh(
+                self.mean_tanh_threshold + self.std_threshold * np.random.randn(1)[0]
+            )
         ) / 2
         return np.array((offer, threshold))
+
+    def update(self, *args, **kwargs):
+        pass
 
 
 class DualUltimatumSACAgent(nn.Module):
@@ -174,11 +184,6 @@ def dualultimatum_bots(
     act_low = env.action_space.low
     act_high = env.action_space.high
 
-    # buf = TransitionBuffer(obs_dim, act_dim, replay_size)
-    # policy_optimizer = Adam(agent.policy.parameters(), lr=policy_lr)
-    # q1_optimizer = Adam(agent.q1.parameters(), lr=qf_lr)
-    # q2_optimizer = Adam(agent.q2.parameters(), lr=qf_lr)
-
     # Set up model saving
     logger.setup_pytorch_saver(player_1)
 
@@ -234,8 +239,11 @@ def dualultimatum_bots(
 
 
 def dualultimatum_ddpg(
-    agent_fn=TD3Agent,
-    player_2=ConstantBot,
+    agent_1_fn=DDPGAgent,
+    agent_1_kwargs=dict(),
+    agent_2_fn=DDPGAgent,
+    agent_2_kwargs=dict(),
+    # player_2=ConstantBot,
     env_fn=DualUltimatum,
     seed=0,
     epochs=100,
@@ -252,7 +260,6 @@ def dualultimatum_ddpg(
     polyak=0.995,
     pi_lr=1e-3,
     q_lr=1e-3,
-    agent_kwargs=dict(),
     logger_kwargs=dict(),
     save_freq=10,
 ):
@@ -270,77 +277,92 @@ def dualultimatum_ddpg(
 
     obs_dim = env.observation_space.shape
     act_dim = env.action_space.shape
-    agent = agent_fn(env.observation_space, env.action_space, **agent_kwargs)
-    agent_target = deepcopy(agent)
+
+    # agent_1_kwargs["observation_space"] = env.observation_space
+    # agent_1_kwargs["action_space"] = env.action_space
+    agent_1 = agent_1_fn(env.observation_space, env.action_space, **agent_1_kwargs)
+    # agent_target = deepcopy(agent)
+
+    # agent_2_kwargs["observation_space"] = env.observation_space
+    # agent_2_kwargs["action_space"] = env.action_space
+    agent_2 = agent_2_fn(env.observation_space, env.action_space, **agent_2_kwargs)
 
     # Freeze target mu, Q so they are not updated by optimizers
-    for p in agent_target.parameters():
-        p.requires_grad = False
+    # for p in agent_target.parameters():
+    #     p.requires_grad = False
 
-    var_counts = tuple(count_vars(module) for module in [agent.pi, agent.q])
-    logger.log(
-        f"\nNumber of parameters \t policy: {var_counts[0]} q: {var_counts[1]}\n"
-    )
+    # var_counts = tuple(count_vars(module) for module in [agent_1.pi, agent_1.q])
+    # logger.log(
+    #     f"\nNumber of parameters \t policy: {var_counts[0]} q: {var_counts[1]}\n"
+    # )
 
     buf = TransitionBuffer(obs_dim, act_dim, replay_size)
-    pi_optimizer = Adam(agent.pi.parameters(), lr=pi_lr)
-    q_optimizer = Adam(agent.q.parameters(), lr=q_lr)
+
+    multi_buf = MultiagentTransitionBuffer(obs_dim, act_dim, 2, replay_size)
+
+    # pi_optimizer = Adam(agent.pi.parameters(), lr=pi_lr)
+    # q_optimizer = Adam(agent.q.parameters(), lr=q_lr)
 
     # Set up model saving
-    logger.setup_pytorch_saver(agent)
+    logger.setup_pytorch_saver(agent_1)
 
-    def compute_loss_policy(data):
-        # get data
-        o = data["obs"]
-        # Get actions that agent policy would take at each step
-        a = agent.pi(o)
-        return -agent.q(torch.cat((o, a), dim=-1)).mean()
+    # def compute_loss_policy(data):
+    #     # get data
+    #     o = data["obs"]
+    #     # Get actions that agent policy would take at each step
+    #     a = agent.pi(o)
+    #     return -agent.q(torch.cat((o, a), dim=-1)).mean()
 
-    def compute_q_target(data):
-        r, o_next, d = data["reward"], data["obs_next"], data["done"]
-        with torch.no_grad():
-            a_next = agent_target.pi(o_next)
-            q_target = agent_target.q(torch.cat((o_next, a_next), dim=-1))
-            q_target = r + gamma * (1 - d) * q_target
-        return q_target
+    # def compute_q_target(data):
+    #     r, o_next, d = data["reward"], data["obs_next"], data["done"]
+    #     with torch.no_grad():
+    #         a_next = agent_target.pi(o_next)
+    #         q_target = agent_target.q(torch.cat((o_next, a_next), dim=-1))
+    #         q_target = r + gamma * (1 - d) * q_target
+    #     return q_target
 
-    def compute_loss_q(data, q_target):
-        o, a = data["obs"], data["act"]
-        q = agent.q(torch.cat((o, a), dim=-1))
-        q_loss_info = {"QVals": q.detach().numpy()}
-        return ((q - q_target) ** 2).mean(), q_loss_info
+    # def compute_loss_q(data, q_target):
+    #     o, a = data["obs"], data["act"]
+    #     q = agent.q(torch.cat((o, a), dim=-1))
+    #     q_loss_info = {"QVals": q.detach().numpy()}
+    #     return ((q - q_target) ** 2).mean(), q_loss_info
 
-    def update():
-        # Get training data from buffer
-        data = buf.get(sample_size=sample_size)
-
-        # Update Q function
-        q_optimizer.zero_grad()
-        q_target = compute_q_target(data)
-        q_loss, q_loss_info = compute_loss_q(data, q_target)
-        q_loss.backward()
-        q_optimizer.step()
-
-        # Freeze Q params during policy update to save time
-        for p in agent.q.parameters():
-            p.requires_grad = False
-        # Update policy
-        pi_optimizer.zero_grad()
-        pi_loss = compute_loss_policy(data)
-        pi_loss.backward()
-        pi_optimizer.step()
-        # Unfreeze Q params after policy update
-        for p in agent.q.parameters():
-            p.requires_grad = True
-
-        # Record things
-        logger.store(LossQ=q_loss.item(), LossPi=pi_loss.item(), **q_loss_info)
-
-        with torch.no_grad():
-            # Use in place method from Spinning Up, faster than creating a new state_dict
-            for p, p_target in zip(agent.parameters(), agent_target.parameters()):
-                p_target.data.mul_(polyak)
-                p_target.data.add_((1 - polyak) * p.data)
+    # def update():
+    #     # Get training data from buffer
+    #     data = buf.get(sample_size=sample_size)
+    #
+    #     q_loss, q_loss_info = agent.update_q(
+    #         data=data, optimizer=q_optimizer, agent_target=agent_target, gamma=gamma
+    #     )
+    #     pi_loss = agent.update_pi(data=data, optimizer=pi_optimizer)
+    #
+    #     # # Update Q function
+    #     # q_optimizer.zero_grad()
+    #     # q_target = compute_q_target(data)
+    #     # q_loss, q_loss_info = compute_loss_q(data, q_target)
+    #     # q_loss.backward()
+    #     # q_optimizer.step()
+    #
+    #     # # Freeze Q params during policy update to save time
+    #     # for p in agent.q.parameters():
+    #     #     p.requires_grad = False
+    #     # # Update policy
+    #     # pi_optimizer.zero_grad()
+    #     # pi_loss = compute_loss_policy(data)
+    #     # pi_loss.backward()
+    #     # pi_optimizer.step()
+    #     # # Unfreeze Q params after policy update
+    #     # for p in agent.q.parameters():
+    #     #     p.requires_grad = True
+    #
+    #     # Record things
+    #     logger.store(LossQ=q_loss.item(), LossPi=pi_loss.item(), **q_loss_info)
+    #
+    #     with torch.no_grad():
+    #         # Use in place method from Spinning Up, faster than creating a new state_dict
+    #         for p, p_target in zip(agent.parameters(), agent_target.parameters()):
+    #             p_target.data.mul_(polyak)
+    #             p_target.data.add_((1 - polyak) * p.data)
 
     def deterministic_policy_test():
         for _ in range(test_episodes):
@@ -350,16 +372,14 @@ def dualultimatum_ddpg(
             d = False
             while not d and not ep_len == max_episode_len:
                 with torch.no_grad():
-                    a1 = agent.act(torch.as_tensor(o, dtype=torch.float32), noise=False)
-                a2 = player_2.act()
-                a = np.concatenate((a1, a2))
+                    a1 = agent_1.act(torch.as_tensor(o, dtype=torch.float32), noise=False)
+                    a2 = agent_2.act(torch.as_tensor(o, dtype=torch.float32), noise=False)
+                a = np.stack((a1, a2))
                 o, r, d, _ = test_env.step(a)
                 ep_ret += r
                 ep_len += 1
             logger.store(
-                TestEpRet1=ep_ret[0],
-                TestEpRet2=ep_ret[1],
-                TestEpLen=ep_len,
+                TestEpRet1=ep_ret[0], TestEpRet2=ep_ret[1], TestEpLen=ep_len,
             )
 
     start_time = time.time()
@@ -373,22 +393,20 @@ def dualultimatum_ddpg(
         episode_length = 0
         for t in range(steps_per_epoch):
 
-            if t_total < start_steps:
-                act_1 = env.action_space.sample()
-            else:
-                act_1 = agent.act(torch.as_tensor(obs, dtype=torch.float32), noise=True)
-            # Step environment given latest agent action
+            act_1 = agent_1.act(torch.as_tensor(obs, dtype=torch.float32), noise=True)
+            act_2 = agent_2.act(torch.as_tensor(obs, dtype=torch.float32), noise=True)
+            # act = np.concatenate((act_1, act_2))
 
-            act_2 = player_2.act()
-            act = np.concatenate((act_1, act_2))
-
+            act = np.stack((act_1, act_2))
             obs_next, reward, done, _ = env.step(act)
 
             episode_return += reward
             episode_length += 1
 
             # Store current step in buffer
-            buf.store(obs, act_1, reward[0], obs_next, done)
+            # buf.store(obs, act_1, reward[0], obs_next, done)
+            # buf.store(obs, act_2, reward[1], obs_next, done)
+            multi_buf.store(obs, act, reward, obs_next, done)
 
             # update episode return and env state
             obs = obs_next
@@ -410,7 +428,9 @@ def dualultimatum_ddpg(
 
             if t_total >= update_after and (t + 1) % update_every == 0:
                 for _ in range(update_every):
-                    update()
+                    data = multi_buf.get(sample_size=sample_size)
+                    agent_1.update(data, agent=0)
+                    agent_2.update(data, agent=1)
 
             t_total += 1
 
@@ -429,9 +449,9 @@ def dualultimatum_ddpg(
         logger.log_tabular("EpLen", average_only=True)
         logger.log_tabular("TestEpLen", average_only=True)
         logger.log_tabular("TotalEnvInteracts", (epoch + 1) * steps_per_epoch)
-        logger.log_tabular("QVals", with_min_and_max=True)
-        logger.log_tabular("LossPi", average_only=True)
-        logger.log_tabular("LossQ", average_only=True)
+        # logger.log_tabular("QVals", with_min_and_max=True)
+        # logger.log_tabular("LossPi", average_only=True)
+        # logger.log_tabular("LossQ", average_only=True)
         logger.log_tabular("Time", time.time() - start_time)
         logger.dump_tabular()
 
@@ -565,7 +585,9 @@ def dualultimatum_td3(
                 p.requires_grad = True
 
             with torch.no_grad():
-                for p, p_targ in zip(agent_target.parameters(), agent_target.parameters()):
+                for p, p_targ in zip(
+                    agent_target.parameters(), agent_target.parameters()
+                ):
                     p_targ.data.mul_(polyak)
                     p_targ.data.add_((1 - polyak) * p.data)
 
