@@ -539,11 +539,11 @@ class TransitionBuffer:
 
 # For off-policy methods
 class MultiagentTransitionBuffer:
-    def __init__(self, obs_dim, act_dim, n_agents, max_size):
-        self.obs = np.zeros(merge_shape(max_size, obs_dim), dtype=np.float32)
-        self.act = np.zeros(merge_shape(max_size, act_dim + (n_agents,)), dtype=np.float32)
-        self.reward = np.zeros((max_size, n_agents), dtype=np.float32)
-        self.obs_next = np.zeros(merge_shape(max_size, obs_dim), dtype=np.float32)
+    def __init__(self, obs_dim, act_dim, num_agents, max_size):
+        self.obs = np.zeros(merge_shape(max_size, (num_agents,) + obs_dim), dtype=np.float32)
+        self.act = np.zeros(merge_shape(max_size, (num_agents,) + act_dim), dtype=np.float32)
+        self.reward = np.zeros((max_size, num_agents), dtype=np.float32)
+        self.obs_next = np.zeros(merge_shape(max_size, (num_agents,) + obs_dim), dtype=np.float32)
         self.done = np.zeros(max_size, dtype=np.float32)
         self.ptr = 0
         self.max_size = max_size

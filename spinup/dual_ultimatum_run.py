@@ -112,17 +112,22 @@ static_agent_kwargs = dict(
 #     test_episodes=200,
 # )
 
-dualultimatum_ddpg(
-    agent_1_fn=DDPGAgent,
-    agent_1_kwargs=static_agent_kwargs,
-    agent_2_fn=DDPGAgent,
-    agent_2_kwargs=static_agent_kwargs,
-    env_fn=DualUltimatum,
-    epochs=epochs,
-    steps_per_epoch=steps_per_epoch,
-    max_episode_len=max_episode_len,
-    test_episodes=200,
-)
+# dualultimatum_ddpg(
+#     agent_1_fn=DDPGAgent,
+#     agent_1_kwargs=static_agent_kwargs,
+#     agent_2_fn=DDPGAgent,
+#     agent_2_kwargs=static_agent_kwargs,
+#     env_fn=DualUltimatum,
+#     epochs=epochs,
+#     steps_per_epoch=steps_per_epoch,
+#     max_episode_len=max_episode_len,
+#     test_episodes=200,
+# )
+
+
+tournament_ddpg(seed=8571)
+# env_fn = DualUltimatumTournament
+# num_agents = 4
 
 # dualultimatum_bots(
 #     ConstantBot(offer=0.5, threshold=0.5),
