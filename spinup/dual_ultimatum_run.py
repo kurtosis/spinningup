@@ -125,7 +125,32 @@ static_agent_kwargs = dict(
 # )
 
 
-tournament_ddpg(seed=8571)
+# tournament_ddpg(seed=8571,
+#                 # bottom_cutoff=1,
+#                 steps_per_epoch=4000,)
+
+
+logger_kwargs, output_msg = logging_info("tournament", subdir="dual_ultimatum")
+env_kwargs = dict(top_cutoff=1, bottom_cutoff=None, top_reward=1.0, bottom_reward=1.0,)
+tournament_ddpg(
+    seed=42,
+    steps_per_epoch=4000,
+    num_agents=4,
+    logger_kwargs=logger_kwargs,
+    env_kwargs=env_kwargs,
+)
+
+logger_kwargs, output_msg = logging_info("tournament", subdir="dual_ultimatum")
+env_kwargs = dict(top_cutoff=1, bottom_cutoff=1, top_reward=1.0, bottom_reward=1.0,)
+tournament_ddpg(
+    seed=42,
+    steps_per_epoch=4000,
+    num_agents=4,
+    logger_kwargs=logger_kwargs,
+    env_kwargs=env_kwargs,
+)
+
+
 # env_fn = DualUltimatumTournament
 # num_agents = 4
 

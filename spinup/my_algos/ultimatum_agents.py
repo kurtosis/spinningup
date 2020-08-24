@@ -397,7 +397,7 @@ def tournament_ddpg(
     start_steps=10,
     update_after=1000,
     update_every=50,
-    test_episodes=10,
+    test_episodes=100,
     log_interval=10,
     max_episode_len=1000,
     gamma=0.99,
@@ -405,6 +405,7 @@ def tournament_ddpg(
     pi_lr=1e-3,
     q_lr=1e-3,
     agent_kwargs=dict(),
+    env_kwargs=dict(),
     logger_kwargs=dict(),
     save_freq=10,
 ):
@@ -417,8 +418,8 @@ def tournament_ddpg(
     torch.manual_seed(seed)
     np.random.seed(seed)
 
-    env = env_fn(num_agents=num_agents)
-    test_env = env_fn(num_agents=num_agents)
+    env = env_fn(num_agents=num_agents, **env_kwargs)
+    test_env = env_fn(num_agents=num_agents, **env_kwargs)
 
     obs_dim = env.observation_space.shape
     act_dim = env.action_space.shape
@@ -436,24 +437,55 @@ def tournament_ddpg(
 
     def deterministic_policy_test():
         for _ in range(test_episodes):
-            o = test_env.reset()
-            ep_ret = np.array([0.0, 0.0])
-            ep_len = 0
-            d = False
-            while not d and not ep_len == max_episode_len:
+            all_obs = test_env.reset()
+            episode_return = np.zeros(num_agents)
+            episode_length = 0
+            done = False
+            while not done and not episode_length == max_episode_len:
                 with torch.no_grad():
-                    a1 = agent_1.act(
-                        torch.as_tensor(o, dtype=torch.float32), noise=False
+                    actions = [
+                        agent_list[i].act(
+                            torch.as_tensor(all_obs[i], dtype=torch.float32),
+                            noise=False,
+                        )
+                        for i in range(num_agents)
+                    ]
+                    actions = np.stack(actions)
+
+                logger.store(
+                    Offer0=actions[0, 0],
+                    Threshold0=actions[0, 1],
+                    Offer1=actions[1, 0],
+                    Threshold1=actions[1, 1],
+                )
+                if test_env.current_round == test_env.num_rounds:
+                    logger.store(
+                        OfferFirstRound=actions[0, 0],
+                        ThresholdFirstRound=actions[0, 1],
                     )
-                    a2 = agent_2.act(
-                        torch.as_tensor(o, dtype=torch.float32), noise=False
+                if test_env.current_round == 1:
+                    logger.store(
+                        OfferLastRound=actions[0, 0],
+                        ThresholdLastRound=actions[0, 1],
                     )
-                a = np.stack((a1, a2))
-                o, r, d, _ = test_env.step(a)
-                ep_ret += r
-                ep_len += 1
+
+                all_obs_next, reward, done, _ = test_env.step(actions)
+                episode_return += reward
+                episode_length += 1
             logger.store(
-                TestEpRet1=ep_ret[0], TestEpRet2=ep_ret[1], TestEpLen=ep_len,
+                TestEpRet0=episode_return[0],
+                TestEpRet1=episode_return[1],
+                TestEpRet2=episode_return[2],
+                TestEpRet3=episode_return[3],
+                TestEpLen=episode_length,
+                TestEpScore0=test_env.scores[0],
+                TestEpScore1=test_env.scores[1],
+                TestEpScore2=test_env.scores[2],
+                TestEpScore3=test_env.scores[3],
+                MeanScore=np.mean(test_env.scores),
+                StdScore=np.std(test_env.scores),
+                MaxScore=np.max(test_env.scores),
+                MinScore=np.min(test_env.scores),
             )
 
     start_time = time.time()
@@ -469,12 +501,17 @@ def tournament_ddpg(
         for t in range(steps_per_epoch):
             # print(all_obs[0, 6:])
             # print('---')
-            actions = [
-                agent_list[i].act(
-                    torch.as_tensor(all_obs[i], dtype=torch.float32), noise=False
-                )
-                for i in range(num_agents)
-            ]
+            if t_total < start_steps:
+                actions = [env.action_space.sample() for i in range(num_agents)]
+            else:
+                actions = [
+                    agent_list[i].act(
+                        torch.as_tensor(all_obs[i], dtype=torch.float32), noise=True
+                    )
+                    for i in range(num_agents)
+                ]
+
+            actions = np.stack(actions)
 
             all_obs_next, reward, done, _ = env.step(actions)
             episode_return += reward
@@ -501,21 +538,36 @@ def tournament_ddpg(
                         EpRet2=episode_return[2],
                         EpRet3=episode_return[3],
                         EpLen=episode_length,
+                        EpScore0=env.scores[0],
+                        EpScore1=env.scores[1],
+                        EpScore2=env.scores[2],
+                        EpScore3=env.scores[3],
                     )
                 all_obs = env.reset()
                 # print(f"start {env.scores}")
                 episode_return = np.zeros(num_agents)
                 episode_length = 0
 
-            # if t_total >= update_after and (t + 1) % update_every == 0:
-            #     for _ in range(update_every):
-            #         data = multi_buf.get(sample_size=sample_size)
-            #         agent_1.update(data, agent=0)
-            #         agent_2.update(data, agent=1)
+                if t_total >= update_after and (t + 1) % update_every == 0:
+                    for i_up in range(update_every):
+                        # print(f'updating {i_up}')
+                        data = multi_buf.get(sample_size=sample_size)
+
+                        def slicer(v, i):
+                            if v.dim() == 1:
+                                return v
+                            elif v.dim() == 2:
+                                return v[:, i]
+                            else:
+                                return v[:, i, :]
+
+                        for i in range(num_agents):
+                            data_agent = {k: slicer(v, i) for k, v in data.items()}
+                            agent_list[i].update(data_agent)
 
             t_total += 1
         logger.store(NumEps=episode_count)
-        # deterministic_policy_test()
+        deterministic_policy_test()
 
         # Save model
         if (epoch % save_freq == 0) or (epoch == epochs - 1):
@@ -523,15 +575,37 @@ def tournament_ddpg(
 
         # Log info about epoch
         logger.log_tabular("Epoch", epoch)
-        logger.log_tabular("EpRet0", with_min_and_max=True)
-        logger.log_tabular("EpRet1", with_min_and_max=True)
-        # logger.log_tabular("TestEpRet1", with_min_and_max=True)
-        logger.log_tabular("EpRet2", with_min_and_max=True)
-        # logger.log_tabular("TestEpRet2", with_min_and_max=True)
-        logger.log_tabular("EpRet3", with_min_and_max=True)
+        logger.log_tabular("EpRet0", average_only=True)
+        logger.log_tabular("EpRet1", average_only=True)
+        logger.log_tabular("EpRet2", average_only=True)
+        logger.log_tabular("EpRet3", average_only=True)
+        logger.log_tabular("EpScore0", average_only=True)
+        logger.log_tabular("EpScore1", average_only=True)
+        logger.log_tabular("EpScore2", average_only=True)
+        logger.log_tabular("EpScore3", average_only=True)
+        logger.log_tabular("TestEpRet0", average_only=True)
+        logger.log_tabular("TestEpRet1", average_only=True)
+        logger.log_tabular("TestEpRet2", average_only=True)
+        logger.log_tabular("TestEpRet3", average_only=True)
+        logger.log_tabular("TestEpScore0", with_min_and_max=True)
+        logger.log_tabular("TestEpScore1", with_min_and_max=True)
+        logger.log_tabular("TestEpScore2", with_min_and_max=True)
+        logger.log_tabular("TestEpScore3", with_min_and_max=True)
+        logger.log_tabular("Offer0", with_min_and_max=True)
+        logger.log_tabular("Threshold0", with_min_and_max=True)
+        logger.log_tabular("Offer1", with_min_and_max=True)
+        logger.log_tabular("Threshold1", with_min_and_max=True)
+        logger.log_tabular("MeanScore", average_only=True)
+        logger.log_tabular("StdScore", average_only=True)
+        logger.log_tabular("MaxScore", average_only=True)
+        logger.log_tabular("MinScore", average_only=True)
+        logger.log_tabular("OfferFirstRound", with_min_and_max=True)
+        logger.log_tabular("ThresholdFirstRound", with_min_and_max=True)
+        logger.log_tabular("OfferLastRound", with_min_and_max=True)
+        logger.log_tabular("ThresholdLastRound", with_min_and_max=True)
         logger.log_tabular("NumEps", average_only=True)
         logger.log_tabular("EpLen", average_only=True)
-        # logger.log_tabular("TestEpLen", average_only=True)
+        logger.log_tabular("TestEpLen", average_only=True)
         logger.log_tabular("TotalEnvInteracts", (epoch + 1) * steps_per_epoch)
         # logger.log_tabular("QVals", with_min_and_max=True)
         # logger.log_tabular("LossPi", average_only=True)

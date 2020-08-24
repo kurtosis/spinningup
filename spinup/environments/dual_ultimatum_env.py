@@ -8,10 +8,39 @@ from spinup.algos.pytorch.vpg.core import *
 EPS = 1e-8
 
 
+class OneHot(gym.Space):
+    """
+    One-hot space. Used as the observation space.
+    """
+
+    def __init__(self, n):
+        super(OneHot, self).__init__()
+        self.n = n
+
+    def sample(self):
+        return np.random.multinomial(1, [1.0 / self.n] * self.n)
+
+    def contains(self, x):
+        return (
+            isinstance(x, np.ndarray)
+            and x.shape == (self.n,)
+            and np.all(np.logical_or(x == 0, x == 1))
+            and np.sum(x) == 1
+        )
+
+    @property
+    def shape(self):
+        return (self.n,)
+
+    def __repr__(self):
+        return "OneHot(%d)" % self.n
+
+    def __eq__(self, other):
+        return self.n == other.n
+
+
 class DualUltimatum(gym.Env):
     """An environment consisting of a 'dual ultimatum' game'"""
-
-    # metadata = {"render.modes": ["human"]}
 
     def __init__(self):
         super(DualUltimatum, self).__init__()
@@ -23,13 +52,13 @@ class DualUltimatum(gym.Env):
         )
 
     def step(self, actions):
-        offer_1, threshold_1 = actions[0, :]
-        offer_2, threshold_2 = actions[1, :]
+        offer_0, threshold_0 = actions[0, :]
+        offer_1, threshold_1 = actions[1, :]
 
-        if offer_1 + EPS >= threshold_2 and offer_2 + EPS >= threshold_1:
-            reward_1 = (1 - offer_1) + offer_2
-            reward_2 = offer_1 + (1 - offer_2)
-            reward = np.array([reward_1, reward_2])
+        if offer_0 + EPS >= threshold_1 and offer_1 + EPS >= threshold_0:
+            reward_0 = (1 - offer_0) + offer_1
+            reward_1 = offer_0 + (1 - offer_1)
+            reward = np.array([reward_0, reward_1])
         else:
             reward = np.array([0, 0])
         obs = np.concatenate((actions[0, :], actions[1, :]))
@@ -39,6 +68,57 @@ class DualUltimatum(gym.Env):
     def reset(self):
         # Nothing do reset for this environment
         return np.array([0.5, 0.5, 0.5, 0.5])
+
+    def render(self, mode="human"):
+        pass
+
+
+class MatrixGame(gym.Env):
+    """An environment consisting of a matrix game with stochastic outomes"""
+
+    NUM_ACTIONS = 3
+    NUM_STATES = NUM_ACTIONS ** 2 + 1
+
+    def __init__(
+        self,
+        payout_mean=np.array([[10, 5, -5], [0, 0, 5], [20, -5, 0]]),
+        payout_std=np.array([[0, 0, 0], [0, 0, 0], [0, 20, 20]]),
+    ):
+        super(MatrixGame, self).__init__()
+        self.num_actions = 3
+        self.action_space = spaces.Tuple(
+            [spaces.Discrete(self.num_actions) for _ in range(2)]
+        )
+        self.observation_space = spaces.Tuple(
+            [OneHot(self.NUM_STATES) for _ in range(2)]
+        )
+        self.payout_mean_matrix = payout_mean
+        self.payout_std_matrix = payout_std
+
+    def step(self, actions):
+        a0, a1 = actions
+
+        reward = [
+            self.payout_mean_matrix[a0, a1]
+            + self.payout_std_matrix[a0, a1] * np.random.randn(1)[0],
+            self.payout_mean_matrix[a1, a0]
+            + self.payout_std_matrix[a1, a0] * np.random.randn(1)[0],
+        ]
+
+        obs0 = np.zeros(self.NUM_STATES)
+        obs1 = np.zeros(self.NUM_STATES)
+        obs0[a0*self.NUM_ACTIONS + a1] = 1
+        obs1[a1*self.NUM_ACTIONS + a0] = 1
+        observations = [obs0, obs1]
+        done = False
+        return observations, reward, done, {}
+
+    def reset(self):
+        init_state = np.zeros(self.NUM_STATES)
+        init_state[-1] = 1
+        return [init_state, init_state]
+
+    def render(self, mode="human"):
         pass
 
 
@@ -56,10 +136,13 @@ class DualUltimatumTournament(gym.Env):
     def __init__(
         self,
         num_agents,
-        num_rounds=4,
-        round_length=3,
+        num_rounds=10,
+        round_length=10,
         noise_size=1,
         top_cutoff=2,
+        bottom_cutoff=1,
+        top_reward=1.0,
+        bottom_reward=1.0,
         game_fn=DualUltimatum,
     ):
         super(DualUltimatumTournament, self).__init__()
@@ -89,6 +172,9 @@ class DualUltimatumTournament(gym.Env):
         self.current_turn = self.round_length
         self.noise_size = noise_size
         self.top_cutoff = top_cutoff
+        self.bottom_cutoff = bottom_cutoff
+        self.top_reward = top_reward
+        self.bottom_reward = bottom_reward
         self.scores = np.random.randn(self.num_agents) * self.noise_size
         self.match_pairs = assign_match_pairs(num_agents)
         self.agent_opponent = np.zeros(self.num_agents, dtype=np.int32)
@@ -124,7 +210,11 @@ class DualUltimatumTournament(gym.Env):
 
     def _final_reward(self):
         ranks = rankdata(-self.scores)
-        return (ranks <= self.top_cutoff).astype(float)
+        reward = (ranks <= self.top_cutoff) * self.top_reward
+        if self.bottom_cutoff is not None:
+            ranks = rankdata(+self.scores)
+            reward += (ranks <= self.bottom_cutoff) * self.bottom_reward
+        return reward
 
     def step(self, actions):
         done = False
@@ -187,3 +277,6 @@ class DualUltimatumTournament(gym.Env):
         # obs - all scores
         self.all_obs[:, 6 : (6 + self.num_agents)] = self.scores
         return self.all_obs
+
+    def render(self, mode="human"):
+        pass
