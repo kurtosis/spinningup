@@ -73,6 +73,61 @@ class DualUltimatum(gym.Env):
         pass
 
 
+class DualUltimatum2(gym.Env):
+    """An environment consisting of a 'dual ultimatum' game'"""
+
+    def __init__(self):
+        super(DualUltimatum2, self).__init__()
+        self.action_space = spaces.Tuple(
+            [
+                spaces.Box(low=0.0, high=1.0, shape=(2,), dtype=np.float32)
+                for _ in range(2)
+            ]
+        )
+        self.observation_space = spaces.Tuple(
+            [
+                spaces.Tuple(
+                    (
+                        spaces.Box(low=0.0, high=1.0, shape=(4,), dtype=np.float32),
+                        spaces.Discrete(2),
+                    )
+                )
+                for _ in range(2)
+            ]
+        )
+
+    def step(self, actions):
+        offer_0, threshold_0 = actions[0, :]
+        offer_1, threshold_1 = actions[1, :]
+
+        if offer_0 + EPS >= threshold_1 and offer_1 + EPS >= threshold_0:
+            reward_0 = (1 - offer_0) + offer_1
+            reward_1 = offer_0 + (1 - offer_1)
+            rewards = np.array([reward_0, reward_1])
+        else:
+            rewards = np.array([0, 0])
+
+        obs = np.array(
+            [
+                np.concatenate((actions[0, :], actions[1, :])),
+                np.concatenate((actions[1, :], actions[0, :])),
+            ]
+        )
+        # Add flag indicating this is not the first step
+        obs = np.concatenate((obs, np.zeros((2, 1))), axis=1)
+        done = False
+        return obs, rewards, done, {}
+
+    def reset(self):
+        # Create init state obs, with flag indicating this is the first step
+        obs = np.zeros((2, 5))
+        obs[:, -1] = 1
+        return obs
+
+    def render(self, mode="human"):
+        pass
+
+
 class MatrixGame(gym.Env):
     """An environment consisting of a matrix game with stochastic outomes"""
 
@@ -98,25 +153,28 @@ class MatrixGame(gym.Env):
     def step(self, actions):
         a0, a1 = actions
 
-        reward = [
-            self.payout_mean_matrix[a0, a1]
-            + self.payout_std_matrix[a0, a1] * np.random.randn(1)[0],
-            self.payout_mean_matrix[a1, a0]
-            + self.payout_std_matrix[a1, a0] * np.random.randn(1)[0],
-        ]
+        reward = np.array(
+            [
+                self.payout_mean_matrix[a0, a1]
+                + self.payout_std_matrix[a0, a1] * np.random.randn(1)[0],
+                self.payout_mean_matrix[a1, a0]
+                + self.payout_std_matrix[a1, a0] * np.random.randn(1)[0],
+            ]
+        )
 
         obs0 = np.zeros(self.NUM_STATES)
         obs1 = np.zeros(self.NUM_STATES)
-        obs0[a0*self.NUM_ACTIONS + a1] = 1
-        obs1[a1*self.NUM_ACTIONS + a0] = 1
-        observations = [obs0, obs1]
+        obs0[a0 * self.NUM_ACTIONS + a1] = 1
+        obs1[a1 * self.NUM_ACTIONS + a0] = 1
+        obs = np.array([obs0, obs1])
         done = False
-        return observations, reward, done, {}
+        return obs, reward, done, {}
 
     def reset(self):
         init_state = np.zeros(self.NUM_STATES)
         init_state[-1] = 1
-        return [init_state, init_state]
+        obs = np.array([init_state, init_state])
+        return obs
 
     def render(self, mode="human"):
         pass
@@ -277,6 +335,164 @@ class DualUltimatumTournament(gym.Env):
         # obs - all scores
         self.all_obs[:, 6 : (6 + self.num_agents)] = self.scores
         return self.all_obs
+
+    def render(self, mode="human"):
+        pass
+
+
+class RoundRobinTournament(gym.Env):
+    """An environment for of a tournament of some pairwise game."""
+
+    def __init__(
+        self,
+        num_agents,
+        num_rounds=10,
+        round_length=10,
+        noise_size=1,
+        top_cutoff=2,
+        bottom_cutoff=1,
+        top_reward=1.0,
+        bottom_reward=1.0,
+        game_fn=DualUltimatum2,
+    ):
+        super(RoundRobinTournament, self).__init__()
+
+        self.num_agents = num_agents
+        self.num_matches = int(num_agents / 2)
+        self.num_rounds = num_rounds
+        self.round_length = round_length
+        self.noise_size = noise_size
+        self.top_cutoff = top_cutoff
+        self.bottom_cutoff = bottom_cutoff
+        self.top_reward = top_reward
+        self.bottom_reward = bottom_reward
+
+        self.match_env_list = [game_fn()] * int(num_agents / 2)
+        self.action_space = spaces.Tuple(
+            [env.action_space for env in self.match_env_list]
+        )
+
+        # hard coded for now (to dualultimatum)
+        # observation space for single match
+        self.match_obs_dim = 5
+        # observation space for tournament
+        self.obs_dim = self.match_obs_dim + num_agents + 1 + 1
+        # Observations are:
+        # 4 (match obs), contin
+        # 1 first turn flag, binary
+        # 1 rounds left, int
+        # 1 opponent score, contin
+        # num_agents (scores), contin
+        # ? should we add more for rankings/thresholds?
+        # opponent id, OHE??? useful when we add bots, or other differences?
+
+        # Create tuple of observations for all agents. Extend match-level obs with tournament-level obs features
+        self.observation_space = spaces.Tuple(
+            [
+                spaces.Tuple(
+                    [space for space in self.match_env_list[0].observation_space[0]]
+                    + [
+                        spaces.Discrete(self.num_rounds),
+                        spaces.Box(
+                            low=0.0,
+                            high=np.inf,
+                            shape=(self.num_agents + 1,),
+                            dtype=np.float32,
+                        ),
+                    ]
+                )
+                for _ in range(self.num_agents)
+            ]
+        )
+
+    def _final_reward(self):
+        ranks = rankdata(-self.scores)
+        reward = (ranks <= self.top_cutoff) * self.top_reward
+        if self.bottom_cutoff is not None:
+            ranks = rankdata(+self.scores)
+            reward += (ranks <= self.bottom_cutoff) * self.bottom_reward
+        return reward
+
+    def step(self, actions):
+        # Rearrange actions as input for each match environment
+        match_actions = [
+            np.array([actions[i] for i in match]) for match in self.match_pairs
+        ]
+
+        # Pass actions to each match env, get next obs/reward
+        match_outputs = [
+            match_env.step(acts)
+            for acts, match_env in zip(match_actions, self.match_env_list)
+        ]
+
+        all_obs = np.zeros((self.num_agents, self.obs_dim))
+        # Update scores/obs based on env steps
+        for pair, output in zip(self.match_pairs, match_outputs):
+            o, r, d, _ = output
+            self.scores[pair] += r
+            # obs - match, last moves
+            all_obs[pair[0], : self.match_obs_dim] = o[0]
+            all_obs[pair[1], : self.match_obs_dim] = o[1]
+
+        # obs - current round / rounds left
+        all_obs[:, self.match_obs_dim] = self.current_round
+        # obs - opponent score
+        all_obs[:, self.match_obs_dim + 1] = [
+            self.scores[i] for i in self.agent_opponent
+        ]
+        # obs - all agents' scores
+        all_obs[:, self.match_obs_dim + 2 :] = self.scores
+
+        reward = np.zeros(self.num_agents)
+        done = False
+        self.current_turn -= 1
+        if self.current_turn == 0:
+            self.current_round -= 1
+            self.current_turn = self.round_length
+            # to do: check that this actually resets state for match environments
+            all_obs[:, : self.match_obs_dim] = np.concatenate([match.reset() for match in self.match_env_list])
+            if self.current_round == 0:
+                reward = self._final_reward()
+                done = True
+            # else:
+            #     for env in self.match_env_list:
+            #         env.reset()
+        return all_obs, reward, done, {}
+
+    def reset(self):
+        self.current_round = self.num_rounds
+        self.current_turn = self.round_length
+        self.scores = np.random.randn(self.num_agents) * self.noise_size
+        self.match_pairs = assign_match_pairs(self.num_agents)
+        self.agent_opponent = np.zeros(self.num_agents, dtype=np.int32)
+        self.agent_match = np.zeros(self.num_agents, dtype=np.int32)
+        for i, m in enumerate(self.match_pairs):
+            # Note each agent's opponent
+            self.agent_opponent[m[0]] = m[1]
+            self.agent_opponent[m[1]] = m[0]
+            # Note each agent's match
+            self.agent_match[m[0]] = i
+            self.agent_match[m[1]] = i
+
+        # Generate initial obs for each match
+        all_obs = np.zeros((self.num_agents, self.obs_dim))
+
+        match_obs = [match_env.reset() for match_env in self.match_env_list]
+
+        for i in range(self.num_matches):
+            p0 = self.match_pairs[i][0]
+            p1 = self.match_pairs[i][1]
+            all_obs[p0, : self.match_obs_dim] = match_obs[i][0]
+            all_obs[p1, : self.match_obs_dim] = match_obs[i][1]
+        # obs - current round / rounds left
+        all_obs[:, self.match_obs_dim] = self.current_round
+        # obs - opponent score
+        all_obs[:, self.match_obs_dim + 1] = [
+            self.scores[i] for i in self.agent_opponent
+        ]
+        # obs - all agents' scores
+        all_obs[:, self.match_obs_dim + 2 :] = self.scores
+        return all_obs
 
     def render(self, mode="human"):
         pass

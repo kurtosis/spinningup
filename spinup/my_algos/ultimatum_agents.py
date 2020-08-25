@@ -12,6 +12,7 @@ from copy import deepcopy
 import numpy as np
 import time
 
+from gym.spaces import Box, Discrete, Tuple
 import torch
 from torch.distributions import Normal
 import torch.nn.functional as F
@@ -387,7 +388,7 @@ def dualultimatum_ddpg(
 def tournament_ddpg(
     agent_fn=DDPGAgent,
     num_agents=4,
-    # player_2=ConstantBot,
+    # agents=None,
     env_fn=DualUltimatumTournament,
     seed=0,
     epochs=10,
@@ -421,16 +422,28 @@ def tournament_ddpg(
     env = env_fn(num_agents=num_agents, **env_kwargs)
     test_env = env_fn(num_agents=num_agents, **env_kwargs)
 
-    obs_dim = env.observation_space.shape
-    act_dim = env.action_space.shape
+    # Determine obs_dim, # of observation vars
+    if isinstance(env.observation_space[0], Box):
+        agent_obs_dim = env.observation_space[0].shape[0]
+    elif isinstance(env.observation_space[0], Discrete):
+        agent_obs_dim = 1
+    elif isinstance(env.observation_space[0], Tuple):
+        agent_obs_dim = 0
+        for space in env.observation_space[0]:
+            if isinstance(space, Box):
+                agent_obs_dim += space.shape[0]
+            else:
+                agent_obs_dim += 1
 
+    agent_action_space = env.action_space[0][0]
+    agent_act_dim = agent_action_space.shape[0]
     agent_list = [
-        agent_fn(env.observation_space, env.action_space, **agent_kwargs)
+        agent_fn(obs_dim=agent_obs_dim, action_space=agent_action_space, **agent_kwargs)
     ] * num_agents
 
-    # buf = TransitionBuffer(obs_dim, act_dim, replay_size)
-
-    multi_buf = MultiagentTransitionBuffer(obs_dim, act_dim, num_agents, replay_size)
+    multi_buf = MultiagentTransitionBuffer(
+        agent_obs_dim, agent_act_dim, num_agents, replay_size
+    )
 
     # Set up model saving
     # logger.setup_pytorch_saver(agent_1)
@@ -465,11 +478,10 @@ def tournament_ddpg(
                     )
                 if test_env.current_round == 1:
                     logger.store(
-                        OfferLastRound=actions[0, 0],
-                        ThresholdLastRound=actions[0, 1],
+                        OfferLastRound=actions[0, 0], ThresholdLastRound=actions[0, 1],
                     )
 
-                all_obs_next, reward, done, _ = test_env.step(actions)
+                all_obs, reward, done, _ = test_env.step(actions)
                 episode_return += reward
                 episode_length += 1
             logger.store(
@@ -492,17 +504,21 @@ def tournament_ddpg(
 
     # Begin training phase.
     t_total = 0
+    play_time = 0.0
     update_time = 0.0
+    agent_time = 0.0
+    deterministic_time = 0.0
     for epoch in range(epochs):
         all_obs = env.reset()
         episode_return = np.zeros(num_agents)
         episode_length = 0
         episode_count = 0
         for t in range(steps_per_epoch):
-            # print(all_obs[0, 6:])
-            # print('---')
+            # play_start = time.time()
             if t_total < start_steps:
-                actions = [env.action_space.sample() for i in range(num_agents)]
+                # Randomly sample actions. Note: this "cheats" and treats agents as interchangeable (same act space)
+                actions = [np.stack(a) for a in env.action_space.sample()]
+                actions = np.concatenate(actions)
             else:
                 actions = [
                     agent_list[i].act(
@@ -510,8 +526,7 @@ def tournament_ddpg(
                     )
                     for i in range(num_agents)
                 ]
-
-            actions = np.stack(actions)
+                actions = np.stack(actions)
 
             all_obs_next, reward, done, _ = env.step(actions)
             episode_return += reward
@@ -521,6 +536,8 @@ def tournament_ddpg(
 
             # update episode return and env state
             all_obs = all_obs_next
+            # play_end = time.time()
+            # play_time += (play_end - play_start)
 
             # check if episode is over
             episode_capped = episode_length == max_episode_len
@@ -549,8 +566,8 @@ def tournament_ddpg(
                 episode_length = 0
 
                 if t_total >= update_after and (t + 1) % update_every == 0:
-                    for i_up in range(update_every):
-                        # print(f'updating {i_up}')
+                    # update_start = time.time()
+                    for _ in range(update_every):
                         data = multi_buf.get(sample_size=sample_size)
 
                         def slicer(v, i):
@@ -563,11 +580,20 @@ def tournament_ddpg(
 
                         for i in range(num_agents):
                             data_agent = {k: slicer(v, i) for k, v in data.items()}
+                            agent_start = time.time()
                             agent_list[i].update(data_agent)
+                            agent_end = time.time()
+                            agent_time += agent_end - agent_start
+                    # update_end = time.time()
+                    # update_time += (update_end - update_start)
 
             t_total += 1
         logger.store(NumEps=episode_count)
+
+        # det_start = time.time()
         deterministic_policy_test()
+        # det_end = time.time()
+        # deterministic_time += (det_end - det_start)
 
         # Save model
         if (epoch % save_freq == 0) or (epoch == epochs - 1):
@@ -612,6 +638,10 @@ def tournament_ddpg(
         # logger.log_tabular("LossQ", average_only=True)
         logger.log_tabular("Time", time.time() - start_time)
         logger.dump_tabular()
+        # print(f'play_time {play_time}')
+        # print(f'update_time {update_time}')
+        # print(f'agent_time {agent_time}')
+        # print(f'deterministic_time {deterministic_time}')
 
 
 def dualultimatum_td3(

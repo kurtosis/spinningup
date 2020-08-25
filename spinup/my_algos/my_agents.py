@@ -1,5 +1,6 @@
 from copy import deepcopy
 import numpy as np
+import time
 
 import torch
 from torch.distributions import Normal
@@ -190,8 +191,9 @@ class DDPGAgent(nn.Module):
 
     def __init__(
         self,
-        observation_space,
-        action_space,
+        obs_dim=None,
+        obs_space=None,
+        action_space=None,
         hidden_layers_mu=(64, 64),
         hidden_layers_q=(64, 64),
         activation=nn.ReLU,
@@ -204,7 +206,8 @@ class DDPGAgent(nn.Module):
         **kwargs
     ):
         super().__init__()
-        obs_dim = observation_space.shape[0]
+        if obs_dim is None:
+            obs_dim = obs_space.shape[0]
         self.act_dim = action_space.shape[0]
         self.act_low = action_space.low
         self.act_high = action_space.high
@@ -289,9 +292,16 @@ class DDPGAgent(nn.Module):
                 p_target.data.add_((1 - self.polyak) * p.data)
 
     def update(self, data, **kwargs):
+        # t0 = time.time()
         pi_loss = self.update_pi(data=data)
+        # t1 = time.time()
         q_loss, q_loss_info = self.update_q(data=data, **kwargs)
+        # t2 = time.time()
         self.update_target()
+        # t3 = time.time()
+        # print(f't pi   {t1-t0}')
+        # print(f't q    {t2-t1}')
+        # print(f't targ {t3-t2}')
         return pi_loss, q_loss, q_loss_info
 
 
@@ -540,10 +550,10 @@ class TransitionBuffer:
 # For off-policy methods
 class MultiagentTransitionBuffer:
     def __init__(self, obs_dim, act_dim, num_agents, max_size):
-        self.obs = np.zeros(merge_shape(max_size, (num_agents,) + obs_dim), dtype=np.float32)
-        self.act = np.zeros(merge_shape(max_size, (num_agents,) + act_dim), dtype=np.float32)
+        self.obs = np.zeros((max_size, num_agents, obs_dim), dtype=np.float32)
+        self.act = np.zeros((max_size, num_agents, act_dim), dtype=np.float32)
         self.reward = np.zeros((max_size, num_agents), dtype=np.float32)
-        self.obs_next = np.zeros(merge_shape(max_size, (num_agents,) + obs_dim), dtype=np.float32)
+        self.obs_next = np.zeros((max_size, num_agents, obs_dim), dtype=np.float32)
         self.done = np.zeros(max_size, dtype=np.float32)
         self.ptr = 0
         self.max_size = max_size
@@ -571,7 +581,7 @@ class MultiagentTransitionBuffer:
         Return needed variables (as tensors) over episodes in buffer.
         Reset pointers for next epoch.
         """
-       # return needed variables as a dictionary
+        # return needed variables as a dictionary
         sample_indexes = np.random.randint(0, self.filled_size, sample_size)
         data = {
             "obs": torch.as_tensor(self.obs[sample_indexes], dtype=torch.float32),
