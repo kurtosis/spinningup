@@ -387,9 +387,12 @@ def dualultimatum_ddpg(
 
 def tournament_ddpg(
     agent_fn=DDPGAgent,
+    agent_kwargs=dict(),
     num_agents=4,
-    # agents=None,
+    agents=None,
+    agents_kwargs=None,
     env_fn=DualUltimatumTournament,
+    env_kwargs=dict(),
     seed=0,
     epochs=10,
     steps_per_epoch=5000,
@@ -405,8 +408,6 @@ def tournament_ddpg(
     polyak=0.995,
     pi_lr=1e-3,
     q_lr=1e-3,
-    agent_kwargs=dict(),
-    env_kwargs=dict(),
     logger_kwargs=dict(),
     save_freq=10,
 ):
@@ -435,11 +436,29 @@ def tournament_ddpg(
             else:
                 agent_obs_dim += 1
 
+    # Create agents, either all same type or specified individually
     agent_action_space = env.action_space[0][0]
     agent_act_dim = agent_action_space.shape[0]
-    agent_list = [
-        agent_fn(obs_dim=agent_obs_dim, action_space=agent_action_space, **agent_kwargs)
-    ] * num_agents
+    if agents is None:
+        agent_list = [
+            agent_fn(
+                obs_dim=agent_obs_dim, action_space=agent_action_space, **agent_kwargs
+            )
+        ] * num_agents
+    else:
+        num_agents = len(agents)
+        if agents_kwargs is None:
+            agent_list = [
+                agent_fn(obs_dim=agent_obs_dim, action_space=agent_action_space)
+                for agent_fn in agents
+            ]
+        else:
+            agent_list = [
+                agent_fn(
+                    obs_dim=agent_obs_dim, action_space=agent_action_space, **kwargs
+                )
+                for agent_fn, kwargs in zip(agents, agents_kwargs)
+            ]
 
     multi_buf = MultiagentTransitionBuffer(
         agent_obs_dim, agent_act_dim, num_agents, replay_size
@@ -466,19 +485,19 @@ def tournament_ddpg(
                     actions = np.stack(actions)
 
                 logger.store(
-                    Offer0=actions[0, 0],
-                    Threshold0=actions[0, 1],
-                    Offer1=actions[1, 0],
-                    Threshold1=actions[1, 1],
+                    TestOffer0=actions[0, 0],
+                    TestThreshold0=actions[0, 1],
+                    TestOffer1=actions[1, 0],
+                    TestThreshold1=actions[1, 1],
                 )
                 if test_env.current_round == test_env.num_rounds:
                     logger.store(
-                        OfferFirstRound=actions[0, 0],
-                        ThresholdFirstRound=actions[0, 1],
+                        TestOfferFirstRound=actions[0, 0],
+                        TestThresholdFirstRound=actions[0, 1],
                     )
                 if test_env.current_round == 1:
                     logger.store(
-                        OfferLastRound=actions[0, 0], ThresholdLastRound=actions[0, 1],
+                        TestOfferLastRound=actions[0, 0], TestThresholdLastRound=actions[0, 1],
                     )
 
                 all_obs, reward, done, _ = test_env.step(actions)
@@ -494,10 +513,10 @@ def tournament_ddpg(
                 TestEpScore1=test_env.scores[1],
                 TestEpScore2=test_env.scores[2],
                 TestEpScore3=test_env.scores[3],
-                MeanScore=np.mean(test_env.scores),
-                StdScore=np.std(test_env.scores),
-                MaxScore=np.max(test_env.scores),
-                MinScore=np.min(test_env.scores),
+                TestMeanScore=np.mean(test_env.scores),
+                TestStdScore=np.std(test_env.scores),
+                TestMaxScore=np.max(test_env.scores),
+                TestMinScore=np.min(test_env.scores),
             )
 
     start_time = time.time()
@@ -528,6 +547,13 @@ def tournament_ddpg(
                 ]
                 actions = np.stack(actions)
 
+            logger.store(
+                Offer0=actions[0, 0],
+                Threshold0=actions[0, 1],)
+            # for p in agent_list[0].pi.parameters():
+            #     print(p.data)
+            #     print('--')
+            # print('------')
             all_obs_next, reward, done, _ = env.step(actions)
             episode_return += reward
             episode_length += 1
@@ -601,38 +627,41 @@ def tournament_ddpg(
 
         # Log info about epoch
         logger.log_tabular("Epoch", epoch)
-        logger.log_tabular("EpRet0", average_only=True)
-        logger.log_tabular("EpRet1", average_only=True)
-        logger.log_tabular("EpRet2", average_only=True)
-        logger.log_tabular("EpRet3", average_only=True)
+        # logger.log_tabular("EpRet0", average_only=True)
+        logger.log_tabular("EpRet0", with_min_and_max=True)
+        # logger.log_tabular("EpRet1", average_only=True)
+        # logger.log_tabular("EpRet2", average_only=True)
+        # logger.log_tabular("EpRet3", average_only=True)
         logger.log_tabular("EpScore0", average_only=True)
-        logger.log_tabular("EpScore1", average_only=True)
-        logger.log_tabular("EpScore2", average_only=True)
-        logger.log_tabular("EpScore3", average_only=True)
-        logger.log_tabular("TestEpRet0", average_only=True)
-        logger.log_tabular("TestEpRet1", average_only=True)
-        logger.log_tabular("TestEpRet2", average_only=True)
-        logger.log_tabular("TestEpRet3", average_only=True)
-        logger.log_tabular("TestEpScore0", with_min_and_max=True)
-        logger.log_tabular("TestEpScore1", with_min_and_max=True)
-        logger.log_tabular("TestEpScore2", with_min_and_max=True)
-        logger.log_tabular("TestEpScore3", with_min_and_max=True)
         logger.log_tabular("Offer0", with_min_and_max=True)
         logger.log_tabular("Threshold0", with_min_and_max=True)
-        logger.log_tabular("Offer1", with_min_and_max=True)
-        logger.log_tabular("Threshold1", with_min_and_max=True)
-        logger.log_tabular("MeanScore", average_only=True)
-        logger.log_tabular("StdScore", average_only=True)
-        logger.log_tabular("MaxScore", average_only=True)
-        logger.log_tabular("MinScore", average_only=True)
-        logger.log_tabular("OfferFirstRound", with_min_and_max=True)
-        logger.log_tabular("ThresholdFirstRound", with_min_and_max=True)
-        logger.log_tabular("OfferLastRound", with_min_and_max=True)
-        logger.log_tabular("ThresholdLastRound", with_min_and_max=True)
-        logger.log_tabular("NumEps", average_only=True)
-        logger.log_tabular("EpLen", average_only=True)
-        logger.log_tabular("TestEpLen", average_only=True)
-        logger.log_tabular("TotalEnvInteracts", (epoch + 1) * steps_per_epoch)
+        # logger.log_tabular("EpScore1", average_only=True)
+        # logger.log_tabular("EpScore2", average_only=True)
+        # logger.log_tabular("EpScore3", average_only=True)
+        logger.log_tabular("TestEpRet0", average_only=True)
+        # logger.log_tabular("TestEpRet1", average_only=True)
+        # logger.log_tabular("TestEpRet2", average_only=True)
+        # logger.log_tabular("TestEpRet3", average_only=True)
+        logger.log_tabular("TestEpScore0", with_min_and_max=True)
+        # logger.log_tabular("TestEpScore1", with_min_and_max=True)
+        # logger.log_tabular("TestEpScore2", with_min_and_max=True)
+        # logger.log_tabular("TestEpScore3", with_min_and_max=True)
+        logger.log_tabular("TestOffer0", with_min_and_max=True)
+        logger.log_tabular("TestThreshold0", with_min_and_max=True)
+        # logger.log_tabular("Offer1", with_min_and_max=True)
+        # logger.log_tabular("Threshold1", with_min_and_max=True)
+        # logger.log_tabular("TestMeanScore", average_only=True)
+        # logger.log_tabular("TestStdScore", average_only=True)
+        # logger.log_tabular("TestMaxScore", average_only=True)
+        # logger.log_tabular("TestMinScore", average_only=True)
+        # logger.log_tabular("TestOfferFirstRound", with_min_and_max=True)
+        # logger.log_tabular("TestThresholdFirstRound", with_min_and_max=True)
+        # logger.log_tabular("TestOfferLastRound", with_min_and_max=True)
+        # logger.log_tabular("TestThresholdLastRound", with_min_and_max=True)
+        # logger.log_tabular("NumEps", average_only=True)
+        # logger.log_tabular("EpLen", average_only=True)
+        # logger.log_tabular("TestEpLen", average_only=True)
+        # logger.log_tabular("TotalEnvInteracts", (epoch + 1) * steps_per_epoch)
         # logger.log_tabular("QVals", with_min_and_max=True)
         # logger.log_tabular("LossPi", average_only=True)
         # logger.log_tabular("LossQ", average_only=True)

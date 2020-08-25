@@ -130,25 +130,77 @@ static_agent_kwargs = dict(
 #                 steps_per_epoch=4000,)
 
 
-logger_kwargs, output_msg = logging_info("tournament", subdir="dual_ultimatum")
-env_kwargs = dict(top_cutoff=2, bottom_cutoff=None, top_reward=1.0, bottom_reward=1.0,)
-agent_kwargs_constantbot = dict(offer=0.6, threshold=0.2)
-agent_kwargs_distrib = dict(
-    mean_offer=0.3, std_offer=0.01, mean_threshold=0.9, std_threshold=0.01,
-)
+# Test all bots
+# logger_kwargs, output_msg = logging_info("tournament", subdir="dual_ultimatum")
+# env_kwargs = dict(top_cutoff=2, bottom_cutoff=None, top_reward=1.0, bottom_reward=1.0,)
+# agent_kwargs_constantbot = dict(offer=0.6, threshold=0.2)
+# agent_kwargs_distrib = dict(
+#     mean_offer=0.3, std_offer=0.01, mean_threshold=0.9, std_threshold=0.01,
+# )
+# tournament_ddpg(
+#     seed=42,
+#     steps_per_epoch=4000,
+#     num_agents=4,
+#     env_fn=RoundRobinTournament,
+#     # agent_fn=ConstantBot,
+#     # agent_kwargs=agent_kwargs_constantbot,
+#     # agent_fn=StaticDistribBot,
+#     # agent_kwargs=agent_kwargs_distrib,
+#     logger_kwargs=logger_kwargs,
+#     env_kwargs=env_kwargs,
+# )
 
+# Test constant bot w/ guaranteed winner
+# logger_kwargs, output_msg = logging_info("tournament", subdir="dual_ultimatum")
+# env_kwargs = dict(top_cutoff=2, bottom_cutoff=None, top_reward=1.0, bottom_reward=1.0,)
+# agent_kwargs_constantbot = dict(offer=0.6, threshold=0.2)
+# agents = [ConstantBot, ConstantBot, ConstantBot, ConstantBot]
+# agent_kwargs_winning = dict(offer=0.200001, threshold=0.0)
+# agents_kwargs = [agent_kwargs_winning, agent_kwargs_constantbot, agent_kwargs_constantbot, agent_kwargs_constantbot]
+# tournament_ddpg(
+#     seed=42,
+#     steps_per_epoch=4000,
+#     num_agents=4,
+#     env_fn=RoundRobinTournament,
+#     agents=agents,
+#     agents_kwargs=agents_kwargs,
+#     logger_kwargs=logger_kwargs,
+#     env_kwargs=env_kwargs,
+# )
+
+# Test DDPG vs constant bots
+logger_kwargs, output_msg = logging_info("tournament", subdir="dual_ultimatum")
+env_kwargs = dict(
+    top_cutoff=2,
+    bottom_cutoff=None,
+    top_reward=1.0,
+    bottom_reward=1.0,
+    relative_reward=False,
+    per_turn_reward=True,
+)
+agent_kwargs_constantbot = dict(offer=0.7, threshold=0.3)
+# agent_kwargs_ddpg = dict(hidden_layers_mu=(256, 256), hidden_layers_q=(256, 256))
+agent_kwargs_ddpg = dict(hidden_layers_mu=(1,), hidden_layers_q=(1,), noise_std=0.1,)
+agents = [DDPGAgent, ConstantBot, ConstantBot, ConstantBot]
+agents_kwargs = [
+    agent_kwargs_ddpg,
+    agent_kwargs_constantbot,
+    agent_kwargs_constantbot,
+    agent_kwargs_constantbot,
+]
 tournament_ddpg(
-    seed=42,
+    seed=736,
     steps_per_epoch=4000,
-    num_agents=4,
+    epochs=20,
+    start_steps=0,
+    sample_size=4096,
     env_fn=RoundRobinTournament,
-    # agent_fn=ConstantBot,
-    # agent_kwargs=agent_kwargs_constantbot,
-    agent_fn=StaticDistribBot,
-    agent_kwargs=agent_kwargs_distrib,
+    agents=agents,
+    agents_kwargs=agents_kwargs,
     logger_kwargs=logger_kwargs,
     env_kwargs=env_kwargs,
 )
+
 
 # tournament_ddpg(
 #     seed=42,

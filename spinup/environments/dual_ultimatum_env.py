@@ -354,6 +354,8 @@ class RoundRobinTournament(gym.Env):
         top_reward=1.0,
         bottom_reward=1.0,
         game_fn=DualUltimatum2,
+        relative_reward=False,
+        per_turn_reward=False,
     ):
         super(RoundRobinTournament, self).__init__()
 
@@ -366,6 +368,8 @@ class RoundRobinTournament(gym.Env):
         self.bottom_cutoff = bottom_cutoff
         self.top_reward = top_reward
         self.bottom_reward = bottom_reward
+        self.relative_reward = relative_reward
+        self.per_turn_reward = per_turn_reward
 
         self.match_env_list = [game_fn()] * int(num_agents / 2)
         self.action_space = spaces.Tuple(
@@ -405,13 +409,16 @@ class RoundRobinTournament(gym.Env):
             ]
         )
 
-    def _final_reward(self):
-        ranks = rankdata(-self.scores)
-        reward = (ranks <= self.top_cutoff) * self.top_reward
-        if self.bottom_cutoff is not None:
-            ranks = rankdata(+self.scores)
-            reward += (ranks <= self.bottom_cutoff) * self.bottom_reward
-        return reward
+    def _final_reward(self, relative_score=True):
+        if relative_score:
+            return self.scores
+        else:
+            ranks = rankdata(-self.scores)
+            reward = (ranks <= self.top_cutoff) * self.top_reward
+            if self.bottom_cutoff is not None:
+                ranks = rankdata(+self.scores)
+                reward += (ranks <= self.bottom_cutoff) * self.bottom_reward
+            return reward
 
     def step(self, actions):
         # Rearrange actions as input for each match environment
@@ -434,8 +441,9 @@ class RoundRobinTournament(gym.Env):
             all_obs[pair[0], : self.match_obs_dim] = o[0]
             all_obs[pair[1], : self.match_obs_dim] = o[1]
 
+        self.scores -= np.mean(self.scores)
         # obs - current round / rounds left
-        all_obs[:, self.match_obs_dim] = self.current_round
+        all_obs[:, self.match_obs_dim] = self.current_round / self.num_rounds
         # obs - opponent score
         all_obs[:, self.match_obs_dim + 1] = [
             self.scores[i] for i in self.agent_opponent
@@ -450,13 +458,20 @@ class RoundRobinTournament(gym.Env):
             self.current_round -= 1
             self.current_turn = self.round_length
             # to do: check that this actually resets state for match environments
-            all_obs[:, : self.match_obs_dim] = np.concatenate([match.reset() for match in self.match_env_list])
+            all_obs[:, : self.match_obs_dim] = np.concatenate(
+                [match.reset() for match in self.match_env_list]
+            )
             if self.current_round == 0:
                 reward = self._final_reward()
                 done = True
-            # else:
-            #     for env in self.match_env_list:
-            #         env.reset()
+
+        # Per turn reward based on change to relative score
+        if self.per_turn_reward:
+            reward = np.zeros(self.num_agents)
+            for pair, output in zip(self.match_pairs, match_outputs):
+                _, r, _, _ = output
+                reward[pair] = r - np.sum(r)/self.num_agents
+
         return all_obs, reward, done, {}
 
     def reset(self):
@@ -485,7 +500,7 @@ class RoundRobinTournament(gym.Env):
             all_obs[p0, : self.match_obs_dim] = match_obs[i][0]
             all_obs[p1, : self.match_obs_dim] = match_obs[i][1]
         # obs - current round / rounds left
-        all_obs[:, self.match_obs_dim] = self.current_round
+        all_obs[:, self.match_obs_dim] = self.current_round / self.num_rounds
         # obs - opponent score
         all_obs[:, self.match_obs_dim + 1] = [
             self.scores[i] for i in self.agent_opponent

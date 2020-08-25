@@ -9,11 +9,13 @@ import torch.nn as nn
 from torch.optim import Adam
 
 
-def mlp(layer_sizes, hidden_activation, final_activation):
+def mlp(layer_sizes, hidden_activation, final_activation, batchnorm=True):
     layers = []
     for i in range(len(layer_sizes) - 1):
         layers.append(nn.Linear(layer_sizes[i], layer_sizes[i + 1]))
         if i < len(layer_sizes) - 2:
+            # if batchnorm:
+            #     layers.append(nn.BatchNorm1d(layer_sizes[i + 1]))
             layers.append(hidden_activation())
         else:
             layers.append(final_activation())
