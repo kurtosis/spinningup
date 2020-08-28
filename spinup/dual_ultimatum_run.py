@@ -7,7 +7,7 @@ from spinup import vpg_pytorch, ppo_pytorch, ddpg_pytorch, td3_pytorch, sac_pyto
 
 from spinup.my_algos.my_training import *
 from spinup.my_algos.ultimatum_agents import *
-from spinup.environments.dual_ultimatum_env import *
+from spinup.environments.tournament_env import *
 
 from spinup.user_config import (
     DEFAULT_DATA_DIR,
@@ -171,16 +171,29 @@ static_agent_kwargs = dict(
 # Test DDPG vs constant bots
 logger_kwargs, output_msg = logging_info("tournament", subdir="dual_ultimatum")
 env_kwargs = dict(
+    num_rounds=1,
+    round_length=10,
+    noise_size=0,
     top_cutoff=2,
     bottom_cutoff=None,
     top_reward=1.0,
     bottom_reward=1.0,
-    relative_reward=False,
-    per_turn_reward=True,
+    score_reward=True,
+    per_turn_reward=False,
+    hide_obs=True,
+    game_kwargs=dict(reward="l1"),
 )
-agent_kwargs_constantbot = dict(offer=0.7, threshold=0.3)
+agent_kwargs_constantbot = dict(offer=0.5, threshold=0.5)
 # agent_kwargs_ddpg = dict(hidden_layers_mu=(256, 256), hidden_layers_q=(256, 256))
-agent_kwargs_ddpg = dict(hidden_layers_mu=(1,), hidden_layers_q=(1,), noise_std=0.1,)
+agent_kwargs_ddpg = dict(
+    hidden_layers_mu=(1,),
+    hidden_layers_q=(64, 64, 64),
+    # hidden_layers_q=(64, 64, 64, 64),
+    noise_std=0.5,
+    pi_lr=1e-3,
+    q_lr=1e-3,
+    # gamma=0,
+)
 agents = [DDPGAgent, ConstantBot, ConstantBot, ConstantBot]
 agents_kwargs = [
     agent_kwargs_ddpg,
@@ -190,15 +203,18 @@ agents_kwargs = [
 ]
 tournament_ddpg(
     seed=736,
-    steps_per_epoch=4000,
-    epochs=20,
+    steps_per_epoch=1000,
+    epochs=50,
+    save_freq=1,
     start_steps=0,
     sample_size=4096,
+    update_after=0,
     env_fn=RoundRobinTournament,
     agents=agents,
     agents_kwargs=agents_kwargs,
     logger_kwargs=logger_kwargs,
     env_kwargs=env_kwargs,
+    q_file="q",
 )
 
 

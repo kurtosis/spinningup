@@ -293,17 +293,13 @@ class DDPGAgent(nn.Module):
                 p_target.data.mul_(self.polyak)
                 p_target.data.add_((1 - self.polyak) * p.data)
 
-    def update(self, data, **kwargs):
-        # t0 = time.time()
+    def update(self, data, logger=None, **kwargs):
         pi_loss = self.update_pi(data=data)
-        # t1 = time.time()
         q_loss, q_loss_info = self.update_q(data=data, **kwargs)
-        # t2 = time.time()
         self.update_target()
-        # t3 = time.time()
-        # print(f't pi   {t1-t0}')
-        # print(f't q    {t2-t1}')
-        # print(f't targ {t3-t2}')
+        # Record things
+        if logger is not None:
+            logger.store(LossQ=q_loss.item(), LossPi=pi_loss.item(), **q_loss_info)
         return pi_loss, q_loss, q_loss_info
 
 

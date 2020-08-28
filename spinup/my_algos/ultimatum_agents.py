@@ -20,8 +20,30 @@ import torch.nn as nn
 from torch.optim import Adam
 
 from spinup.my_algos.my_agents import *
-from spinup.environments.dual_ultimatum_env import *
+from spinup.environments.tournament_env import *
 from spinup.utils.logx import EpochLogger
+
+import pandas as pd
+
+
+def eval_q_fn(agent, nn=101, filename="/Users/kurtsmith/q.csv"):
+    xx = np.linspace(0, 1, nn)
+    yy = np.linspace(0, 1, nn)
+    xg, yg = np.meshgrid(xx, yy)
+    xf = np.reshape(xg, (nn * nn, 1))
+    yf = np.reshape(yg, (nn * nn, 1))
+    grid_pts = np.concatenate((xf, yf), axis=-1)
+    obs = np.zeros((grid_pts.shape[0], 11))
+    grid_input = torch.tensor(
+        np.concatenate((obs, grid_pts), axis=-1), dtype=torch.float32
+    )
+    q_long = np.round(agent.q(grid_input).detach().numpy(), 4)
+    # q_grid = np.reshape(q_long, xg.shape)
+    # np.savetxt(filename, q_grid, fmt='%2.4f', delimiter=', ')
+    df_q = pd.DataFrame(
+        dict(offer=xf.squeeze(), threshold=yf.squeeze(), q=q_long.squeeze())
+    )
+    df_q.to_csv(filename, index=False)
 
 
 def mlp(layer_sizes, hidden_activation, final_activation):
@@ -391,7 +413,7 @@ def tournament_ddpg(
     num_agents=4,
     agents=None,
     agents_kwargs=None,
-    env_fn=DualUltimatumTournament,
+    env_fn=RoundRobinTournament,
     env_kwargs=dict(),
     seed=0,
     epochs=10,
@@ -409,6 +431,7 @@ def tournament_ddpg(
     pi_lr=1e-3,
     q_lr=1e-3,
     logger_kwargs=dict(),
+    q_file=None,
     save_freq=10,
 ):
     """Run DDPG training."""
@@ -497,7 +520,8 @@ def tournament_ddpg(
                     )
                 if test_env.current_round == 1:
                     logger.store(
-                        TestOfferLastRound=actions[0, 0], TestThresholdLastRound=actions[0, 1],
+                        TestOfferLastRound=actions[0, 0],
+                        TestThresholdLastRound=actions[0, 1],
                     )
 
                 all_obs, reward, done, _ = test_env.step(actions)
@@ -523,10 +547,10 @@ def tournament_ddpg(
 
     # Begin training phase.
     t_total = 0
-    play_time = 0.0
-    update_time = 0.0
-    agent_time = 0.0
-    deterministic_time = 0.0
+    # play_time = 0.0
+    # update_time = 0.0
+    # agent_time = 0.0
+    # deterministic_time = 0.0
     for epoch in range(epochs):
         all_obs = env.reset()
         episode_return = np.zeros(num_agents)
@@ -548,8 +572,8 @@ def tournament_ddpg(
                 actions = np.stack(actions)
 
             logger.store(
-                Offer0=actions[0, 0],
-                Threshold0=actions[0, 1],)
+                Offer0=actions[0, 0], Threshold0=actions[0, 1],
+            )
             # for p in agent_list[0].pi.parameters():
             #     print(p.data)
             #     print('--')
@@ -606,12 +630,7 @@ def tournament_ddpg(
 
                         for i in range(num_agents):
                             data_agent = {k: slicer(v, i) for k, v in data.items()}
-                            agent_start = time.time()
-                            agent_list[i].update(data_agent)
-                            agent_end = time.time()
-                            agent_time += agent_end - agent_start
-                    # update_end = time.time()
-                    # update_time += (update_end - update_start)
+                            agent_list[i].update(data_agent, logger=logger)
 
             t_total += 1
         logger.store(NumEps=episode_count)
@@ -624,6 +643,8 @@ def tournament_ddpg(
         # Save model
         if (epoch % save_freq == 0) or (epoch == epochs - 1):
             logger.save_state({"env": env}, None)
+            if q_file is not None:
+                eval_q_fn(agent_list[0], filename=f"{logger.output_dir}/{q_file}_{epoch}.csv")
 
         # Log info about epoch
         logger.log_tabular("Epoch", epoch)
@@ -662,9 +683,9 @@ def tournament_ddpg(
         # logger.log_tabular("EpLen", average_only=True)
         # logger.log_tabular("TestEpLen", average_only=True)
         # logger.log_tabular("TotalEnvInteracts", (epoch + 1) * steps_per_epoch)
-        # logger.log_tabular("QVals", with_min_and_max=True)
-        # logger.log_tabular("LossPi", average_only=True)
-        # logger.log_tabular("LossQ", average_only=True)
+        logger.log_tabular("QVals", with_min_and_max=True)
+        logger.log_tabular("LossPi", average_only=True)
+        logger.log_tabular("LossQ", average_only=True)
         logger.log_tabular("Time", time.time() - start_time)
         logger.dump_tabular()
         # print(f'play_time {play_time}')
